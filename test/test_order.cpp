@@ -1,0 +1,204 @@
+#include <yggdrasil/state_machine.hpp>
+#include <string>
+#include <string_view>
+#include <cstdint>
+#include <gtest/gtest.h>
+
+using namespace yggdrasil;
+
+struct order_state : state_machine
+{
+    enum class state
+    {
+        uninited,
+        order_received,
+        open,
+        partially_filled,
+        filled,
+        order_rejected,
+        order_canceled,
+    };
+    
+    enum class event
+    {
+        new_order,
+        replaced,
+        trade,
+        cancel,
+        rejected,
+        replaced_rejected,
+        cancel_rejected,
+        cancel_sent,
+        replace_sent,
+    };
+    
+    enum type_t
+    {
+        market,
+        limit,
+        regular_peg,
+        mid_peg,
+        market_peg,
+    };
+    
+    state order_state {};
+    std::string symbol;
+    uint32_t orderSize{};
+    double orderPrice{};
+    type_t type{};
+    double pegOffset{};
+    
+    [[=init_from<"orderSize">{}]]
+    uint32_t leavesQty{};
+    
+    [[=init_val<0>{}]]
+    uint32_t cumQty{};
+    
+    [[=init_val<0.0>{}]]
+    double avgPx{};
+    
+    std::string rejectText;
+    
+    [[=initial{}]]
+    auto to_order_received(std::string_view symbol, uint32_t orderSize, double orderPrice,
+                           type_t type, double pegOffset) -> any_of<state::open, state::order_rejected>;
+
+    [[=on_error("Order already open")]]
+    auto to_open() -> any_of<state::order_canceled, state::partially_filled, state::filled>;
+    
+    auto to_order_canceled() -> final;
+    auto to_partially_filled() -> any_of<state::order_canceled, state::partially_filled, state::filled>;
+    
+    [[=on_error("Order already filled")]]
+    auto to_filled() -> final;
+    
+    auto to_order_rejected() -> final;
+    
+    [[=transition(state::open)]]
+    on new_order(double price)
+    {
+        orderPrice = price;
+        return accepted;
+    }
+    
+    [[=transition(state::order_rejected)]]
+    on rejected(std::string_view text)
+    {
+        rejectText = text;
+        return accepted;
+    }
+    
+    [[=transition(state::order_canceled)]]
+    on cancel()
+    {
+        return accepted;
+    }
+    
+    [[=transition(any_of<state::partially_filled, state::filled>{})]]
+    on trade(uint32_t fillQty, double fillPx)
+    {
+        avgPx = (avgPx * cumQty + fillQty * fillPx) / (fillQty + cumQty);
+        leavesQty -= fillQty;
+        cumQty += fillQty;
+        return leavesQty ? to(state::partially_filled) : to(state::filled);
+    }
+};
+
+TEST(OrderStateMachineTest, InitialStateAndAccessors) {
+    auto fsm = build_state_machine_type<order_state>{};
+    
+    // Initializer method called
+    fsm.initialize("AAPL", 100, 150.5, order_state::limit, 0.0);
+    
+    // Check state using accessor
+    EXPECT_EQ(fsm.order_state(), order_state::state::order_received);
+    EXPECT_EQ(fsm.symbol(), "AAPL");
+    EXPECT_EQ(fsm.orderSize(), 100);
+}
+
+TEST(OrderStateMachineTest, NewOrderEvent) {
+    auto fsm = build_state_machine_type<order_state>{};
+    fsm.initialize("AAPL", 100, 150.5, order_state::limit, 0.0);
+    
+    auto result = fsm.new_order(155.0);
+    EXPECT_TRUE(result.has_value());
+    
+    EXPECT_EQ(fsm.order_state(), order_state::state::open);
+    EXPECT_EQ(fsm.orderPrice(), 155.0);
+}
+
+TEST(OrderStateMachineTest, TradeFormula) {
+    auto fsm = build_state_machine_type<order_state>{};
+    fsm.initialize("AAPL", 100, 150.5, order_state::limit, 0.0);
+    fsm.new_order(150.5); // moves to open
+    
+    auto res1 = fsm.trade(40, 150.0);
+    EXPECT_TRUE(res1.has_value());
+    EXPECT_EQ(fsm.order_state(), order_state::state::partially_filled);
+    EXPECT_EQ(fsm.leavesQty(), 60);
+    EXPECT_EQ(fsm.cumQty(), 40);
+    EXPECT_EQ(fsm.avgPx(), 150.0);
+    
+    auto res2 = fsm.trade(60, 160.0);
+    EXPECT_TRUE(res2.has_value());
+    EXPECT_EQ(fsm.order_state(), order_state::state::filled);
+    EXPECT_EQ(fsm.leavesQty(), 0);
+    EXPECT_EQ(fsm.cumQty(), 100);
+    EXPECT_EQ(fsm.avgPx(), 156.0); // (40*150 + 60*160) / 100
+}
+
+TEST(OrderStateMachineTest, InvalidTransitions) {
+    auto fsm = build_state_machine_type<order_state>{};
+    
+    // Test that an event allowed only in state::open is rejected in uninited
+    auto res1 = fsm.trade(40, 150.0);
+    EXPECT_FALSE(res1.has_value());
+    EXPECT_EQ(res1.error(), "Invalid transition from current state"); // default error since uninited has no on_error
+
+    fsm.initialize("AAPL", 100, 150.5, order_state::limit, 0.0);
+    
+    // In state uninited (after to_order_received, before new_order), trade should still fail
+    auto res2 = fsm.trade(40, 150.0);
+    EXPECT_FALSE(res2.has_value());
+
+    // Move to open
+    fsm.new_order(150.5);
+    
+    // In state open, trade should succeed
+    auto res3 = fsm.trade(40, 150.0);
+    EXPECT_TRUE(res3.has_value());
+    EXPECT_EQ(fsm.order_state(), order_state::state::partially_filled);
+    
+    // In state partially_filled, trade to filled
+    auto res4 = fsm.trade(60, 160.0);
+    EXPECT_TRUE(res4.has_value());
+    EXPECT_EQ(fsm.order_state(), order_state::state::filled);
+    
+    // In state filled, any event should be rejected with the custom error
+    auto res5 = fsm.trade(10, 150.0);
+    EXPECT_FALSE(res5.has_value());
+    EXPECT_EQ(res5.error(), "Order already filled");
+}
+
+TEST(OrderStateMachineTest, StateHelpers) {
+    auto fsm = build_state_machine_type<order_state>{};
+    
+    EXPECT_FALSE(fsm.is_inited());
+    EXPECT_FALSE(fsm.is_final());
+
+    fsm.initialize("AAPL", 100, 150.5, order_state::limit, 0.0);
+    
+    // Now it is inited because the initial setup moved the state to order_received
+    EXPECT_TRUE(fsm.is_inited());
+    EXPECT_FALSE(fsm.is_final());
+
+    fsm.new_order(150.5); // moves to open
+    
+    EXPECT_TRUE(fsm.is_inited());
+    EXPECT_FALSE(fsm.is_final());
+
+    fsm.trade(100, 160.0); // moves to filled
+    
+    EXPECT_TRUE(fsm.is_inited());
+    EXPECT_TRUE(fsm.is_final());
+}

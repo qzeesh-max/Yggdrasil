@@ -1,0 +1,11 @@
+# Build artifacts
+build/
+build.log
+
+# Binary executables
+test_meta
+test_meta2
+test_meta_string
+
+# macOS
+.DS_Store
