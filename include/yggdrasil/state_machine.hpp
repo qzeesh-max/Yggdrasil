@@ -51,9 +51,9 @@ struct state_machine {
     template <size_t N>
     fixed_string(const char (&)[N]) -> fixed_string<N - 1>;
 
-    template <fixed_string S>
+    template <std::meta::info field_>
     struct init_from {
-        constexpr static std::string_view field_name() { return S.view(); }
+        static constexpr const auto field = field_;
     };
     
     template <size_t N>
@@ -115,8 +115,10 @@ struct is_init_val<state_machine::init_val<V>> : std::true_type {};
 template <typename T>
 struct is_init_from : std::false_type {};
 
-template <state_machine::fixed_string S>
-struct is_init_from<state_machine::init_from<S>> : std::true_type {};
+template <std::meta::info F>
+struct is_init_from<state_machine::init_from<F>> : std::true_type {
+    static constexpr std::meta::info field = F;
+};
 
 template <typename T> struct is_initial : std::false_type {};
 template <> struct is_initial<state_machine::initial> : std::true_type {};
@@ -275,13 +277,7 @@ struct InitialProxyMethod {
                     if constexpr (detail::is_init_val<AnnoType>::value) {
                         rules.[:mem:] = static_cast<typename [: std::meta::type_of(mem) :]>(AnnoType::value);
                     } else if constexpr (detail::is_init_from<AnnoType>::value) {
-                        template for (constexpr auto src_mem : members) {
-                            if constexpr (std::meta::is_nonstatic_data_member(src_mem) && std::meta::has_identifier(src_mem)) {
-                                if constexpr (std::meta::identifier_of(src_mem) == AnnoType::field_name()) {
-                                    rules.[:mem:] = static_cast<typename [: std::meta::type_of(mem) :]>(rules.[:src_mem:]);
-                                }
-                            }
-                        }
+                        rules.[:mem:] = rules.[:AnnoType::field:];
                     }
                 }
             }
@@ -709,25 +705,6 @@ consteval auto generate_state_machine_type() {
                             }();
                             if constexpr (!event_name_valid) {
                                 throw "Event handler name does not match any enumerator in the 'event' enum";
-                            }
-                        }
-                    }
-                } else if constexpr (std::meta::is_nonstatic_data_member(mem)) {
-                    static constexpr auto annos = std::define_static_array(std::meta::annotations_of(mem));
-                    template for (constexpr auto anno : annos) {
-                        using AnnoType = std::remove_cvref_t<typename [: std::meta::type_of(anno) :]>;
-                        if constexpr (detail::is_init_from<AnnoType>::value) {
-                            constexpr bool valid_target = []() {
-                                bool found = false;
-                                template for (constexpr auto src_mem : members) {
-                                    if constexpr (std::meta::is_nonstatic_data_member(src_mem) && std::meta::has_identifier(src_mem)) {
-                                        if constexpr (std::meta::identifier_of(src_mem) == AnnoType::field_name()) found = true;
-                                    }
-                                }
-                                return found;
-                            }();
-                            if constexpr (!valid_target) {
-                                throw "Invalid init_from annotation: target field does not exist";
                             }
                         }
                     }

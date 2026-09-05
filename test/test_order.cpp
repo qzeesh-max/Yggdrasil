@@ -50,7 +50,7 @@ struct order_state : state_machine
     type_t type{};
     double pegOffset{};
     
-    [[=init_from<"orderSize">{}]]
+    [[=init_from<^^orderSize>{}]]
     uint32_t leavesQty{};
     
     [[=init_val<0>{}]]
