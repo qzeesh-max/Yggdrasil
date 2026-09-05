@@ -406,7 +406,15 @@ struct EventProxyMethod {
 
         auto result = rules.[:method:](std::forward<Args>(args)...);
         if (result.result == state_machine::transition_result::rejected) {
-            return std::unexpected("Event rejected by handler");
+            std::string_view event_reject_error = "Event rejected by handler";
+            template for (constexpr auto anno : annos) {
+                using AnnoType = std::remove_cvref_t<typename [: std::meta::type_of(anno) :]>;
+                if constexpr (is_on_error<AnnoType>::value) {
+                    constexpr auto err_obj = std::meta::extract<AnnoType>(anno);
+                    event_reject_error = err_obj.message();
+                }
+            }
+            return std::unexpected(std::string(event_reject_error));
         }
 
         uint32_t chosen_target = 0;

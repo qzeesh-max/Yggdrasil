@@ -135,6 +135,7 @@ struct order_state : state_machine
 
     [[=can_revert_final{}]]
     [[=transition(any_of<state::partially_filled, state::filled, state::order_canceled>{})]]
+    [[=on_error("Trade to bust not found")]]
     on bust_trade(std::string_view tradeId)
     {
         if (auto it = trades.find(tradeId); it != trades.end()) {            
@@ -293,6 +294,17 @@ TEST(OrderStateMachineTest, TradeMapping) {
     // bust a trade
     auto res3 = fsm.bust_trade("T001");
     EXPECT_TRUE(res3.has_value());
+    EXPECT_EQ(fsm.order_state(), order_state::state::order_canceled);
+    EXPECT_EQ(fsm.leavesQty(), 0);
+    EXPECT_EQ(fsm.cumQty(), 60);
+    EXPECT_EQ(fsm.avgPx(), 152.0);
+    EXPECT_EQ(trades.size(), 1u);
+    EXPECT_EQ(trades.find("T001"), trades.end());   
+
+    // try busting the trade again
+    auto res4 = fsm.bust_trade("T001");
+    EXPECT_FALSE(res4.has_value());
+    EXPECT_EQ(res4.error(), "Trade to bust not found");
     EXPECT_EQ(fsm.order_state(), order_state::state::order_canceled);
     EXPECT_EQ(fsm.leavesQty(), 0);
     EXPECT_EQ(fsm.cumQty(), 60);
