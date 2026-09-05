@@ -10,7 +10,7 @@ Yggdrasil is a highly declarative, attribute-driven Finite State Machine (FSM) f
 ## 🌟 Key Features
 
 * **Declarative & Self-Documenting:** Say goodbye to convoluted transition tables and massive `switch` statements. Yggdrasil uses C++ attributes like `[[=transition(state::open)]]` directly on your event handlers. The code *is* the documentation.
-* **Zero-Boilerplate Data Management:** Variables are automatically tracked and initialized. Need to initialize `leavesQty` from `orderSize`? Just write `[[=init_from<^^orderSize>{}]]`. Accessors and getters are generated automatically.
+* **Zero-Boilerplate Data Management:** Variables are automatically tracked and initialized. Need to initialize `leavesQty` from `orderSize`? Just write `[[=init_from<^^orderSize>{}]]`. Read-only accessors (getters) are generated automatically, ensuring state can only be modified through valid events.
 * **Intelligent Data Mapping:** Track historical data (like trades on an order) natively. With `[[=mapping<^^trades>{}]]` and `[[=storage_key{}]]`, Yggdrasil automatically hashes, stores, and maps incoming event data without manual map-insertion logic.
 * **Safe by Default (and Revertible):** Yggdrasil forces you to define valid endpoints and automatically rejects invalid events with rich errors like `[[=on_error("Order already filled")]]`. It even supports reverting from final states via `[[=can_revert_final{}]]`.
 * **Seamless Testability:** Generated FSM event handlers return `std::expected<void, std::string>`, making unit testing incredibly straightforward.
@@ -143,6 +143,46 @@ You can compile and run it instantly:
 ```bash
 ./examples/run_driver_license.sh
 ```
+
+## 📝 Detailed Annotations & Features
+
+Yggdrasil uses C++26 reflection to process custom annotations. Here is a detailed breakdown of available annotations:
+
+### State Initialization
+
+*   `[[=initial{}]]`: Marks a state machine transition rule as the initializer transition. The generated FSM proxy will always expose this rule as an `initialize` method. **Automatic Assignment:** When arguments are passed to this `initialize` method, Yggdrasil reflects on the state machine struct. If any argument's name matches a member variable of the struct, it automatically assigns the argument to that member without requiring any boilerplate code.
+*   `[[=init_val<V>{}]]`: Initializes a member variable to a compile-time constant `V` during the `initialize` call.
+    ```cpp
+    [[=init_val<0>{}]]
+    uint32_t cumQty{}; // Automatically set to 0 on initialize
+    ```
+*   `[[=init_from<^^field>{}]]`: Automatically initializes the annotated member variable with the value of another member variable (`field`) during the `initialize` call.
+    ```cpp
+    uint32_t orderSize{};
+    
+    [[=init_from<^^orderSize>{}]]
+    uint32_t leavesQty{}; // Automatically set to the value of orderSize on initialize
+    ```
+
+### Collections & Data Mapping
+
+*   `[[=mapping<^^collection_name>{}]]`: Attached to an event handler, it tells Yggdrasil to automatically insert the event data into a specified `std::unordered_map` (e.g., `collection_name`).
+*   `[[=storage_key{}]]`: Used in tandem with `[[=mapping<...>{}]]`. It marks a specific parameter in the event handler to be used as the map's key. 
+
+### Transition Control & Errors
+
+*   `-> final` (return type constraint): Marks the target state of a transition as a final state.
+*   `[[=can_revert_final{}]]`: Attached to an event handler, it explicitly overrides the final state lockout, allowing the FSM to transition out of a final state.
+*   `[[=on_error("message")]]`: Provides a custom, rich error message when a transition is rejected or when a duplicate map key is detected.
+
+## 🛡️ Enforcing State Management
+
+Yggdrasil strictly enforces state safety and validity at both compile-time and runtime:
+
+*   **Invalid Transitions**: Calling an event handler when the FSM is not in one of the states specified by `[[=transition(...)]]` automatically rejects the event. The generated proxy method returns a `std::unexpected<std::string>` containing the error message.
+*   **Final State Lockouts**: Reaching a state targeted by `-> final` locks the FSM. No further transitions or events are permitted (they will be automatically rejected) unless an event explicitly uses the `[[=can_revert_final{}]]` annotation.
+*   **Duplicate Key Checks**: When utilizing `[[=mapping<...>{}]]`, Yggdrasil automatically checks if the `[[=storage_key{}]]` already exists in the collection before executing the event handler. If it does, the transition is aborted and an error is returned.
+*   **Safe Rejections**: State transitions never throw exceptions on invalid input. Instead, they gracefully return a `std::expected` object, allowing you to handle the error natively.
 
 ## 🛠️ Requirements
 
