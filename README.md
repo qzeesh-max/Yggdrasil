@@ -105,4 +105,4 @@ Yggdrasil relies heavily on the upcoming C++26 Reflection TS (`std::meta`).
 
 ## 📄 License
 
-This project is licensed under the MIT License.
+This project is licensed under the GNU AFFERO GENERAL PUBLIC LICENSE.
