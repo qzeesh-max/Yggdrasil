@@ -184,7 +184,7 @@ TEST(OrderStateMachineTest, NewOrderEvent) {
 TEST(OrderStateMachineTest, TradeFormula) {
     auto fsm = build_state_machine_type<order_state>{};
     fsm.initialize("AAPL", 100, 150.5, order_state::limit, 0.0);
-    fsm.new_order(150.5); // moves to open
+    EXPECT_TRUE(fsm.new_order(150.5)); // moves to open
     
     auto res1 = fsm.trade("ID1", 40, 150.0);
     EXPECT_TRUE(res1.has_value());
@@ -216,7 +216,7 @@ TEST(OrderStateMachineTest, InvalidTransitions) {
     EXPECT_FALSE(res2.has_value());
 
     // Move to open
-    fsm.new_order(150.5);
+    EXPECT_TRUE(fsm.new_order(150.5));
     
     // In state open, trade should succeed
     auto res3 = fsm.trade("ID1", 40, 150.0);
@@ -246,12 +246,12 @@ TEST(OrderStateMachineTest, StateHelpers) {
     EXPECT_TRUE(fsm.is_inited());
     EXPECT_FALSE(fsm.is_final());
 
-    fsm.new_order(150.5); // moves to open
+    EXPECT_TRUE(fsm.new_order(150.5)); // moves to open
     
     EXPECT_TRUE(fsm.is_inited());
     EXPECT_FALSE(fsm.is_final());
 
-    fsm.trade("ID1", 100, 160.0); // moves to filled
+    EXPECT_TRUE(fsm.trade("ID1", 100, 160.0)); // moves to filled
     
     EXPECT_TRUE(fsm.is_inited());
     EXPECT_TRUE(fsm.is_final());
@@ -260,7 +260,7 @@ TEST(OrderStateMachineTest, StateHelpers) {
 TEST(OrderStateMachineTest, TradeMapping) {
     auto fsm = build_state_machine_type<order_state>{};
     fsm.initialize("AAPL", 100, 150.0, order_state::limit, 0.0);
-    fsm.new_order(150.0); // open
+    EXPECT_TRUE(fsm.new_order(150.0)); // open
 
     // First trade fills 40 shares
     auto res1 = fsm.trade("T001", 40, 151.0);
