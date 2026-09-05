@@ -149,8 +149,7 @@ You can compile and run it instantly:
 Yggdrasil relies heavily on the upcoming C++26 Reflection TS (`std::meta`). 
 
 * A compiler supporting C++26 and `<meta>` (e.g., bleeding-edge Clang/GCC forks implementing P2996 or related reflection proposals).
-* C++26 standard library support (specifically `std::expected` and `std::string_view`).
-
+* C++23 standard library support for `std::expected` (and C++17 for `std::string_view`).
 ## 📄 License
 
 This project is licensed under the GNU AFFERO GENERAL PUBLIC LICENSE.
