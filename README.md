@@ -1,5 +1,5 @@
 <p align="center">
-![Yggdrasil Logo](assets/yggdrasil_logo.jpg)
+<img src="assets/yggdrasil_logo.jpg" />
 </p>
 # 🌳 Yggdrasil
 
