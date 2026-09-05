@@ -134,7 +134,7 @@ struct order_state : state_machine
     }
 
     [[=can_revert_final{}]]
-    [[=transition(any_of<state::partially_filled, state::filled, state::order_canceled>{})]]
+    [[=transition(any_of<state::partially_filled, state::open, state::order_canceled>{})]]
     [[=on_error("Trade to bust not found")]]
     on bust_trade(std::string_view tradeId)
     {
