@@ -10,9 +10,10 @@
 #include <expected>
 #include <array>
 #include <string>
-
-#if __has_include(<meta>)
 #include <meta>
+
+#if !defined(__cpp_impl_reflection) || __cpp_impl_reflection < 202506L
+#error "state_machine requires C++26 reflection support"
 #endif
 
 namespace yggdrasil {
