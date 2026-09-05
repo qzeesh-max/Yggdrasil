@@ -25,6 +25,7 @@ struct state_machine {
 
     struct initial {};
     struct final {};
+    struct can_revert_final {};
 
     template<typename T>
     struct transition
@@ -101,6 +102,10 @@ struct is_transition : std::false_type {};
 template <typename T>
 struct is_transition<state_machine::transition<T>> : std::true_type {};
 
+template <typename T> struct is_can_revert_final : std::false_type {};
+
+template <> struct is_can_revert_final<state_machine::can_revert_final> : std::true_type {};
+
 template <typename T>
 struct is_init_val : std::false_type {};
 
@@ -121,6 +126,15 @@ template <> struct is_final_state<state_machine::final> : std::true_type {};
 
 template <typename T> struct is_on_error : std::false_type {};
 template <size_t N> struct is_on_error<state_machine::on_error<N>> : std::true_type {};
+
+template <typename T> struct is_mapping : std::false_type {};
+template <std::meta::info F> struct is_mapping<state_machine::mapping<F>> : std::true_type {
+    static constexpr std::meta::info field = F;
+};
+
+template <typename T> struct is_storage_key : std::false_type {};
+template <> struct is_storage_key<state_machine::storage_key> : std::true_type {};
+
 
 template <size_t N>
 struct targets_array {
@@ -288,6 +302,10 @@ struct EventProxyMethod {
         static constexpr auto annos = std::define_static_array(std::meta::annotations_of(method));
         template for (constexpr auto anno : annos) {
             using AnnoType = std::remove_cvref_t<typename [: std::meta::type_of(anno) :]>;
+            if constexpr (is_can_revert_final<AnnoType>::value) {
+                early_valid = true;
+                break;
+            }
             if constexpr (is_transition<AnnoType>::value) {
                 constexpr auto extracted = std::meta::extract<AnnoType>(anno);
                 if (is_any_target_allowed(current_state, RulesData, extracted.target)) {
@@ -317,6 +335,75 @@ struct EventProxyMethod {
             return std::unexpected(std::string(err));
         }
 
+        // --- mapping + storage_key: duplicate-key check (pre-transition) ---
+        // Detect if this method has [[=mapping<^^field>{}]] and [[=storage_key{}]] annotations.
+        // If so, find the key argument, look it up in the map, and reject if it already exists.
+        static constexpr std::meta::info mapping_field = []() consteval {
+            template for (constexpr auto anno : annos) {
+                using AnnoType = std::remove_cvref_t<typename [: std::meta::type_of(anno) :]>;
+                if constexpr (is_mapping<AnnoType>::value) {
+                    return is_mapping<AnnoType>::field;
+                }
+            }
+            return ^^void;
+        }();
+
+        static constexpr std::meta::info storage_key_param = []() consteval {
+            if constexpr (mapping_field == ^^void) return ^^void;
+            static constexpr auto params = std::define_static_array(std::meta::parameters_of(method));
+            template for (constexpr auto p : params) {
+                static constexpr auto p_annos = std::define_static_array(std::meta::annotations_of(p));
+                template for (constexpr auto pa : p_annos) {
+                    using PAType = std::remove_cvref_t<typename [: std::meta::type_of(pa) :]>;
+                    if constexpr (is_storage_key<PAType>::value) {
+                        return p;
+                    }
+                }
+            }
+            return ^^void;
+        }();
+
+        // Compute the index of the storage_key param in the Args pack.
+        static constexpr size_t key_arg_idx = []() consteval {
+            if constexpr (storage_key_param == ^^void) return size_t(-1);
+            static constexpr auto params = std::define_static_array(std::meta::parameters_of(method));
+            size_t idx = 0;
+            template for (constexpr auto p : params) {
+                if constexpr (p == storage_key_param) return idx;
+                idx++;
+            }
+            return size_t(-1);
+        }();
+
+        // safe_key_idx: clamp to 0 to avoid std::get<size_t(-1)> instantiation errors.
+        // The template for guard ensures this code only executes at runtime when mapping is active.
+        static constexpr size_t safe_key_idx = (key_arg_idx == size_t(-1)) ? 0 : key_arg_idx;
+
+        // --- mapping + storage_key: duplicate-key check (pre-transition) ---
+        // Use template for over a 0- or 1-element array (lazy splicer evaluation).
+        // safe_key_idx == 0 means "no mapping" (clamped); only push when key_arg_idx was valid.
+        static constexpr auto mapping_fields_arr = []() consteval {
+            std::vector<std::meta::info> v;
+            if constexpr (key_arg_idx != size_t(-1)) v.push_back(mapping_field);
+            return std::define_static_array(v);
+        }();
+
+        template for (constexpr auto mf : mapping_fields_arr) {
+            auto& map_ref = rules.[:mf:];
+            auto key = std::string(std::get<safe_key_idx>(std::forward_as_tuple(args...)));
+            if (map_ref.count(key)) {
+                std::string_view dup_err = "Duplicate key";
+                template for (constexpr auto anno : annos) {
+                    using AnnoType = std::remove_cvref_t<typename [: std::meta::type_of(anno) :]>;
+                    if constexpr (is_on_error<AnnoType>::value) {
+                        constexpr auto err_obj = std::meta::extract<AnnoType>(anno);
+                        dup_err = err_obj.message();
+                    }
+                }
+                return std::unexpected(std::string(dup_err));
+            }
+        }
+
         auto result = rules.[:method:](std::forward<Args>(args)...);
         if (result.result == state_machine::transition_result::rejected) {
             return std::unexpected("Event rejected by handler");
@@ -324,14 +411,21 @@ struct EventProxyMethod {
 
         uint32_t chosen_target = 0;
         bool valid = false;
+        bool allowed = false;
 
         template for (constexpr auto anno : annos) {
             using AnnoType = std::remove_cvref_t<typename [: std::meta::type_of(anno) :]>;
-            if constexpr (is_transition<AnnoType>::value) {
+            if constexpr (is_can_revert_final<AnnoType>::value) {
+                chosen_target = result.targetState;
+                valid = true;
+                allowed = true;
+                break;
+            } else if constexpr (is_transition<AnnoType>::value) {
                 constexpr auto extracted = std::meta::extract<AnnoType>(anno);
                 chosen_target = resolve_target_state(result, extracted.target);
                 if (is_valid_target(chosen_target, extracted.target)) {
                     valid = true;
+                    break;
                 }
             }
         }
@@ -340,16 +434,18 @@ struct EventProxyMethod {
             return std::unexpected("Invalid target state returned from handler");
         }
 
-        bool allowed = false;
-        for (uint32_t i = 0; i < RulesData.num_transitions; ++i) {
-            if (RulesData.transitions[i].state == current_state) {
-                for (uint32_t j = 0; j < RulesData.transitions[i].num_targets; ++j) {
-                    if (RulesData.transitions[i].targets[j] == chosen_target) {
-                        allowed = true;
-                        break;
+        if (!allowed)
+        {
+            for (uint32_t i = 0; i < RulesData.num_transitions; ++i) {
+                if (RulesData.transitions[i].state == current_state) {
+                    for (uint32_t j = 0; j < RulesData.transitions[i].num_targets; ++j) {
+                        if (RulesData.transitions[i].targets[j] == chosen_target) {
+                            allowed = true;
+                            break;
+                        }
                     }
+                    break;
                 }
-                break;
             }
         }
         
@@ -374,6 +470,7 @@ struct EventProxyMethod {
             return std::unexpected(std::string(err));
         }
 
+        // Update state
         static constexpr auto members = std::define_static_array(std::meta::members_of(^^RulesType, std::meta::access_context::current()));
         template for (constexpr auto mem : members) {
             if constexpr (std::meta::is_nonstatic_data_member(mem) && std::meta::has_identifier(mem)) {
@@ -384,13 +481,56 @@ struct EventProxyMethod {
             }
         }
 
+        // --- mapping + storage_key: store value into map (post-transition) ---
+        // Reuse mapping_fields_arr (0 or 1 element) as the lazy guard.
+        template for (constexpr auto mf : mapping_fields_arr) {
+            using MapType   = typename [: std::meta::type_of(mf) :];
+            using ValueType = typename MapType::mapped_type;
+
+            static constexpr auto params = std::define_static_array(std::meta::parameters_of(method));
+            static constexpr auto value_members = std::define_static_array(
+                std::meta::members_of(^^ValueType, std::meta::access_context::current()));
+
+            auto args_tuple = std::forward_as_tuple(args...);
+            auto key = std::string(std::get<safe_key_idx>(args_tuple));
+
+            // Build the value by default-init then assigning each field whose name matches a param.
+            ValueType val{};
+            template for (constexpr auto vm : value_members) {
+                if constexpr (std::meta::is_nonstatic_data_member(vm) && std::meta::has_identifier(vm)) {
+                    constexpr std::string_view field_name = std::meta::identifier_of(vm);
+                    // Compute which param index has this field name (excluding storage_key param).
+                    static constexpr size_t matched_param_idx = []() consteval -> size_t {
+                        auto ps = std::meta::parameters_of(method);
+                        for (size_t i = 0; i < ps.size(); ++i) {
+                            auto p = ps[i];
+                            if (p == storage_key_param) continue;
+                            if (std::meta::has_identifier(p) && std::meta::identifier_of(p) == field_name)
+                                return i;
+                        }
+                        return size_t(-1);
+                    }();
+                    if constexpr (matched_param_idx != size_t(-1)) {
+                        static constexpr size_t safe_param_idx = (matched_param_idx == size_t(-1)) ? 0 : matched_param_idx;
+                        val.[:vm:] = static_cast<typename [: std::meta::type_of(vm) :]>(
+                            std::get<safe_param_idx>(args_tuple));
+                    }
+                }
+            }
+
+            rules.[:mf:].emplace(std::move(key), std::move(val));
+        }
+
+
+
         return {};
     }
+
 };
 
 template <typename FSM, typename RulesType, std::meta::info method, ptrdiff_t offset>
 struct AccessorProxyMethod {
-    auto operator()() const {
+    const auto& operator()() const {
         auto& fsm_proxy = *reinterpret_cast<const FSM*>(reinterpret_cast<const char*>(this) + offset);
         return fsm_proxy.__rules__.[:method:];
     }

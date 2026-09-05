@@ -25,6 +25,7 @@ struct order_state : state_machine
         new_order,
         replaced,
         trade,
+        bust_trade,
         cancel,
         rejected,
         replaced_rejected,
@@ -100,7 +101,24 @@ struct order_state : state_machine
         double fillPx {};
     };
 
-    using trades_t = std::unordered_map<std::string, trade_data_t>;
+    struct hasher
+    {
+        using is_transparent = std::true_type;
+
+        size_t operator()(std::string_view sv) const {
+            return std::hash<std::string_view>{}(sv);
+        }
+
+        size_t operator()(const std::string& s) const {
+            return std::hash<std::string>{}(s);
+        }
+
+        size_t operator()(const char* s) const {
+            return std::hash<std::string_view>{}(s);
+        }
+    };
+
+    using trades_t = std::unordered_map<std::string, trade_data_t, hasher, std::equal_to<>>;
 
     trades_t trades;
     
@@ -113,6 +131,29 @@ struct order_state : state_machine
         leavesQty -= fillQty;
         cumQty += fillQty;
         return leavesQty ? to(state::partially_filled) : to(state::filled);
+    }
+
+    [[=can_revert_final{}]]
+    [[=transition(any_of<state::partially_filled, state::filled, state::order_canceled>{})]]
+    on bust_trade(std::string_view tradeId)
+    {
+        if (auto it = trades.find(tradeId); it != trades.end()) {            
+            avgPx = (avgPx * cumQty - it->second.fillQty * it->second.fillPx) / (cumQty - it->second.fillQty);            
+            cumQty -= it->second.fillQty;
+            trades.erase(it);
+
+            if (order_state == state::filled) {
+                return to(state::order_canceled);
+            } else if (order_state == state::partially_filled) {
+                if (cumQty != 0)
+                {
+                    return to(state::partially_filled);
+                }
+                return to(state::open);
+            }
+            return to(order_state);
+        }
+        return state_machine::rejected;
     }
 };
 
@@ -213,4 +254,49 @@ TEST(OrderStateMachineTest, StateHelpers) {
     
     EXPECT_TRUE(fsm.is_inited());
     EXPECT_TRUE(fsm.is_final());
+}
+
+TEST(OrderStateMachineTest, TradeMapping) {
+    auto fsm = build_state_machine_type<order_state>{};
+    fsm.initialize("AAPL", 100, 150.0, order_state::limit, 0.0);
+    fsm.new_order(150.0); // open
+
+    // First trade fills 40 shares
+    auto res1 = fsm.trade("T001", 40, 151.0);
+    EXPECT_TRUE(res1.has_value());
+    EXPECT_EQ(fsm.order_state(), order_state::state::partially_filled);
+
+    // The trade should be stored in the map
+    auto& trades = fsm.trades();
+    ASSERT_EQ(trades.size(), 1u);
+    ASSERT_NE(trades.find("T001"), trades.end());
+    EXPECT_EQ(trades.at("T001").fillQty, 40u);
+    EXPECT_DOUBLE_EQ(trades.at("T001").fillPx, 151.0);
+
+    // Duplicate trade ID should be rejected with the on_error message
+    auto res_dup = fsm.trade("T001", 20, 152.0);
+    EXPECT_FALSE(res_dup.has_value());
+    EXPECT_EQ(res_dup.error(), "Duplicate Trade ID");
+    EXPECT_EQ(fsm.order_state(), order_state::state::partially_filled);
+    EXPECT_EQ(fsm.leavesQty(), 60);
+    EXPECT_EQ(fsm.cumQty(), 40);
+    EXPECT_EQ(fsm.avgPx(), 151.0);
+
+    // A different ID goes through fine
+    auto res2 = fsm.trade("T002", 60, 152.0);
+    EXPECT_TRUE(res2.has_value());
+    EXPECT_EQ(fsm.order_state(), order_state::state::filled);
+    ASSERT_EQ(trades.size(), 2u);
+    EXPECT_EQ(trades.at("T002").fillQty, 60u);
+    EXPECT_DOUBLE_EQ(trades.at("T002").fillPx, 152.0);
+    
+    // bust a trade
+    auto res3 = fsm.bust_trade("T001");
+    EXPECT_TRUE(res3.has_value());
+    EXPECT_EQ(fsm.order_state(), order_state::state::order_canceled);
+    EXPECT_EQ(fsm.leavesQty(), 0);
+    EXPECT_EQ(fsm.cumQty(), 60);
+    EXPECT_EQ(fsm.avgPx(), 152.0);
+    EXPECT_EQ(trades.size(), 1u);
+    EXPECT_EQ(trades.find("T001"), trades.end());   
 }
