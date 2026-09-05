@@ -28,20 +28,21 @@ Yggdrasil allows you to define your states, events, and data in a single `struct
 ```cpp
 #include <yggdrasil/state_machine.hpp>
 #include <string>
+#include <unordered_map>
 
 using namespace yggdrasil;
 
 struct order_state : state_machine {
     // 1. Define States and Events
-    enum class state { uninited, order_received, open, filled, order_rejected, order_canceled };
-    enum class event { new_order, trade, cancel };
+    enum class state { uninited, order_received, open, partially_filled, filled, order_rejected, order_canceled };
+    enum class event { new_order, trade, bust_trade, cancel };
     
     state order_state {};
     std::string symbol;
     uint32_t orderSize{};
     
-    // 2. Zero-Boilerplate Initialization
-    [[=init_from<"orderSize">{}]]
+    // 2. Zero-Boilerplate Initialization (using C++26 reflection variables)
+    [[=init_from<^^orderSize>{}]]
     uint32_t leavesQty{};
     
     [[=init_val<0>{}]]
@@ -52,8 +53,10 @@ struct order_state : state_machine {
     auto to_order_received(std::string_view symbol, uint32_t orderSize) -> any_of<state::open, state::order_rejected>;
 
     [[=on_error("Order already open")]]
-    auto to_open() -> any_of<state::order_canceled, state::filled>;
+    auto to_open() -> any_of<state::order_canceled, state::partially_filled, state::filled>;
     
+    auto to_partially_filled() -> any_of<state::order_canceled, state::partially_filled, state::filled>;
+
     [[=on_error("Order already filled")]]
     auto to_filled() -> final;
     
@@ -63,11 +66,38 @@ struct order_state : state_machine {
         return accepted;
     }
     
-    [[=transition(state::filled)]]
-    on trade(uint32_t fillQty) {
+    // Define a map to automatically store trade data
+    struct trade_data_t {
+        uint32_t fillQty {};
+        double fillPx {};
+    };
+    std::unordered_map<std::string, trade_data_t> trades;
+
+    // Yggdrasil automatically inserts into `trades`, extracting `tradeId` as the map key
+    [[=transition(any_of<state::partially_filled, state::filled>{})]]
+    [[=mapping<^^trades>{}]]
+    [[=on_error("Duplicate Trade ID")]]
+    on trade([[=storage_key{}]]std::string_view tradeId, uint32_t fillQty, double fillPx) {
         leavesQty -= fillQty;
         cumQty += fillQty;
-        return leavesQty ? to(state::open) : to(state::filled);
+        return leavesQty ? to(state::partially_filled) : to(state::filled);
+    }
+
+    // You can even revert from a final state (like filled) using can_revert_final!
+    [[=can_revert_final{}]]
+    [[=transition(any_of<state::partially_filled, state::open, state::order_canceled>{})]]
+    [[=on_error("Trade to bust not found")]]
+    on bust_trade(std::string_view tradeId) {
+        if (auto it = trades.find(std::string(tradeId)); it != trades.end()) {
+            cumQty -= it->second.fillQty;
+            leavesQty += it->second.fillQty;
+            trades.erase(it);
+            
+            if (order_state == state::filled) return to(state::order_canceled);
+            if (cumQty > 0) return to(state::partially_filled);
+            return to(state::open);
+        }
+        return rejected;
     }
 };
 ```
@@ -91,9 +121,13 @@ if (result.has_value()) {
     std::cout << "Symbol: " << fsm.symbol() << "\n";
 }
 
+// Data mapping automatically tracks your data
+fsm.trade("T001", 40, 154.5);
+std::cout << "Trades recorded: " << fsm.trades().size() << "\n";
+
 // Invalid transitions safely return unexpected errors
-auto bad_transition = fsm.trade(100); 
-// bad_transition.error() == "Order already open" (if called in wrong state)
+auto bad_transition = fsm.trade("T002", 100, 155.0); 
+// bad_transition.error() == "Order already open" (if called in wrong state, e.g. uninited)
 ```
 
 ## 🛠️ Requirements
