@@ -2,10 +2,21 @@
 build/
 build.log
 
-# Binary executables
+# Binary executables (root-level scratch binaries)
+a.out
 test_meta
 test_meta2
 test_meta_string
+test_col_ref_logic
+test_find_member
+test_plural
+test_template_reflect
+test_template_reflect*
+test_tuple_idx
+
+# Scratch/temp Python patch scripts
+*.py
+patch*
 
 # macOS
 .DS_Store

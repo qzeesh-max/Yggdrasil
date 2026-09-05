@@ -446,6 +446,19 @@ consteval auto generate_state_machine_type() {
         if constexpr (std::meta::identifier_of(enumerators[0]) != "uninited") throw "First state must be 'uninited'";
         if constexpr (static_cast<int>(std::meta::extract<typename [: (enum_type) :]>(enumerators[0])) != 0) throw "'uninited' state must have value 0";
 
+        // Discover the 'event' enum (nested enum class named "event" inside Definition)
+        static constexpr std::meta::info event_enum_type = []() {
+            auto mems = std::meta::members_of(definition_type, std::meta::access_context::current());
+            for (auto m : mems) {
+                if (std::meta::is_type(m) && std::meta::has_identifier(m)) {
+                    if (std::meta::identifier_of(m) == "event") {
+                        return m; // info for the enum type itself
+                    }
+                }
+            }
+            return ^^void;
+        }();
+
         constexpr std::meta::info state_mem = []() {
             auto mems = std::meta::members_of(definition_type, std::meta::access_context::current());
             for (auto m : mems) {
@@ -528,6 +541,22 @@ consteval auto generate_state_machine_type() {
                                 for (size_t i = 0; i < err_len; ++i) rules.transitions[state_idx].error_msg[i] = err_buf[i];
                                 rules.transitions[state_idx].error_msg_len = err_len;
                                 for (size_t i = 0; i < targets.size; ++i) rules.transitions[state_idx].targets[rules.transitions[state_idx].num_targets++] = targets.data[i];
+                            }
+                        }
+                    } else if constexpr (std::meta::has_identifier(std::meta::return_type_of(mem)) &&
+                                         std::meta::identifier_of(std::meta::return_type_of(mem)) == "on") {
+                        // Validate that the event handler name matches an enumerator in the 'event' enum
+                        if constexpr (event_enum_type != ^^void) {
+                            static constexpr std::string_view event_name = std::meta::identifier_of(mem);
+                            constexpr bool event_name_valid = []() {
+                                auto event_es = std::meta::enumerators_of(event_enum_type);
+                                for (auto e : event_es) {
+                                    if (std::meta::identifier_of(e) == event_name) return true;
+                                }
+                                return false;
+                            }();
+                            if constexpr (!event_name_valid) {
+                                throw "Event handler name does not match any enumerator in the 'event' enum";
                             }
                         }
                     }
