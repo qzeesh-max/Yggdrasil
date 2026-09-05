@@ -1,3 +1,4 @@
+#include <unordered_map>
 #include <yggdrasil/state_machine.hpp>
 #include <string>
 #include <string_view>
@@ -93,9 +94,20 @@ struct order_state : state_machine
     {
         return accepted;
     }
+
+    struct trade_data_t {
+        uint32_t fillQty {};
+        double fillPx {};
+    };
+
+    using trades_t = std::unordered_map<std::string, trade_data_t>;
+
+    trades_t trades;
     
     [[=transition(any_of<state::partially_filled, state::filled>{})]]
-    on trade(uint32_t fillQty, double fillPx)
+    [[=mapping<^^trades>{}]]
+    [[=on_error("Duplicate Trade ID")]]
+    on trade([[=storage_key{}]]std::string_view tradeId, uint32_t fillQty, double fillPx)
     {
         avgPx = (avgPx * cumQty + fillQty * fillPx) / (fillQty + cumQty);
         leavesQty -= fillQty;
@@ -132,14 +144,14 @@ TEST(OrderStateMachineTest, TradeFormula) {
     fsm.initialize("AAPL", 100, 150.5, order_state::limit, 0.0);
     fsm.new_order(150.5); // moves to open
     
-    auto res1 = fsm.trade(40, 150.0);
+    auto res1 = fsm.trade("ID1", 40, 150.0);
     EXPECT_TRUE(res1.has_value());
     EXPECT_EQ(fsm.order_state(), order_state::state::partially_filled);
     EXPECT_EQ(fsm.leavesQty(), 60);
     EXPECT_EQ(fsm.cumQty(), 40);
     EXPECT_EQ(fsm.avgPx(), 150.0);
     
-    auto res2 = fsm.trade(60, 160.0);
+    auto res2 = fsm.trade("ID2", 60, 160.0);
     EXPECT_TRUE(res2.has_value());
     EXPECT_EQ(fsm.order_state(), order_state::state::filled);
     EXPECT_EQ(fsm.leavesQty(), 0);
@@ -151,31 +163,31 @@ TEST(OrderStateMachineTest, InvalidTransitions) {
     auto fsm = build_state_machine_type<order_state>{};
     
     // Test that an event allowed only in state::open is rejected in uninited
-    auto res1 = fsm.trade(40, 150.0);
+    auto res1 = fsm.trade("ID1", 40, 150.0);
     EXPECT_FALSE(res1.has_value());
     EXPECT_EQ(res1.error(), "Invalid transition from current state"); // default error since uninited has no on_error
 
     fsm.initialize("AAPL", 100, 150.5, order_state::limit, 0.0);
     
     // In state uninited (after to_order_received, before new_order), trade should still fail
-    auto res2 = fsm.trade(40, 150.0);
+    auto res2 = fsm.trade("ID2", 40, 150.0);
     EXPECT_FALSE(res2.has_value());
 
     // Move to open
     fsm.new_order(150.5);
     
     // In state open, trade should succeed
-    auto res3 = fsm.trade(40, 150.0);
+    auto res3 = fsm.trade("ID1", 40, 150.0);
     EXPECT_TRUE(res3.has_value());
     EXPECT_EQ(fsm.order_state(), order_state::state::partially_filled);
     
     // In state partially_filled, trade to filled
-    auto res4 = fsm.trade(60, 160.0);
+    auto res4 = fsm.trade("ID2", 60, 160.0);
     EXPECT_TRUE(res4.has_value());
     EXPECT_EQ(fsm.order_state(), order_state::state::filled);
     
     // In state filled, any event should be rejected with the custom error
-    auto res5 = fsm.trade(10, 150.0);
+    auto res5 = fsm.trade("ID3", 10, 150.0);
     EXPECT_FALSE(res5.has_value());
     EXPECT_EQ(res5.error(), "Order already filled");
 }
@@ -197,7 +209,7 @@ TEST(OrderStateMachineTest, StateHelpers) {
     EXPECT_TRUE(fsm.is_inited());
     EXPECT_FALSE(fsm.is_final());
 
-    fsm.trade(100, 160.0); // moves to filled
+    fsm.trade("ID1", 100, 160.0); // moves to filled
     
     EXPECT_TRUE(fsm.is_inited());
     EXPECT_TRUE(fsm.is_final());

@@ -84,6 +84,13 @@ struct state_machine {
     }
 
     struct format {};
+
+    template <std::meta::info field>
+    struct mapping{
+    };
+
+    struct storage_key{
+    };
 };
 
 namespace detail {
