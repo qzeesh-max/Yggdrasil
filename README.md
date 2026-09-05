@@ -130,6 +130,18 @@ auto bad_transition = fsm.trade("T002", 100, 155.0);
 // bad_transition.error() == "Order already open" (if called in wrong state, e.g. uninited)
 ```
 
+### 🏎️ Driver License Example
+
+Check out `examples/driver_license.cpp` for a comprehensive, real-world demonstration of Yggdrasil's capabilities. It models a driver license registration system, utilizing:
+- **`any_of` target routing**: Events can conditionally route into multiple valid states based on their logic (e.g. passing a test goes to `licensed`, failing goes to `rejected`).
+- **`[[=can_revert_final{}]]`**: Demonstrates overriding final state lockouts (e.g. paying fines to clear a `revoked` license).
+- **`[[=mapping<^^..._>{}]]` Collections**: Automatically records driving citations against the driver's record and guards against duplicate tickets.
+
+You can compile and run it instantly:
+```bash
+./examples/run_driver_license.sh
+```
+
 ## 🛠️ Requirements
 
 Yggdrasil relies heavily on the upcoming C++26 Reflection TS (`std::meta`). 
