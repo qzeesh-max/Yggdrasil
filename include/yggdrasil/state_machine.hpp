@@ -425,15 +425,12 @@ struct EventProxyMethod {
             using AnnoType = std::remove_cvref_t<typename [: std::meta::type_of(anno) :]>;
             if constexpr (is_can_revert_final<AnnoType>::value) {
                 chosen_target = result.targetState;
-                valid = true;
                 allowed = true;
-                break;
             } else if constexpr (is_transition<AnnoType>::value) {
                 constexpr auto extracted = std::meta::extract<AnnoType>(anno);
                 chosen_target = resolve_target_state(result, extracted.target);
                 if (is_valid_target(chosen_target, extracted.target)) {
                     valid = true;
-                    break;
                 }
             }
         }
