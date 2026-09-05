@@ -1,4 +1,4 @@
-![Yggdrasil Logo](assets/yggdrasil_logo.png)
+![Yggdrasil Logo](assets/yggdrasil_logo.jpg)
 # 🌳 Yggdrasil
 
 > **The declarative, reflection-powered Finite State Machine framework for modern C++26.**
