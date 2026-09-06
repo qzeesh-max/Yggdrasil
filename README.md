@@ -190,7 +190,7 @@ Yggdrasil relies heavily on the upcoming C++26 Reflection TS (`std::meta`).
 
 The current project is built and tested using the following toolchain:
 * **Build System**: CMake (3.20+)
-* **Compiler**: GCC 16.1.0 or higher (annotation retrieval fails on 16.0.1; requires `-freflection` flag for P2996 support)
+* **Compiler**: GCC 16.1.0 or higher (annotation retrieval on function parameters fails on 16.0.1; requires `-freflection` flag for P2996 support)
 * **Language Standard**: C++26
 * **Dependencies**: GoogleTest (fetched automatically via CMake)
 * **Standard Library**: Requires support for `std::expected` (C++23) and `std::string_view` (C++17).
