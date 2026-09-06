@@ -28,6 +28,7 @@
 #include <array>
 #include <string>
 #include <meta>
+#include <stdint.h>
 
 #if !defined(__cpp_impl_reflection) || __cpp_impl_reflection < 202506L
 #error "state_machine requires C++26 reflection support"
