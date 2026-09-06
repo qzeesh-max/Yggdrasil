@@ -184,12 +184,16 @@ Yggdrasil strictly enforces state safety and validity at both compile-time and r
 *   **Duplicate Key Checks**: When utilizing `[[=mapping<...>{}]]`, Yggdrasil automatically checks if the `[[=storage_key{}]]` already exists in the collection before executing the event handler. If it does, the transition is aborted and an error is returned.
 *   **Safe Rejections**: State transitions never throw exceptions on invalid input. Instead, they gracefully return a `std::expected` object, allowing you to handle the error natively.
 
-## 🛠️ Requirements
+## 🛠️ Toolchain & Requirements
 
 Yggdrasil relies heavily on the upcoming C++26 Reflection TS (`std::meta`). 
 
-* A compiler supporting C++26 and `<meta>` (e.g., bleeding-edge Clang/GCC forks implementing P2996 or related reflection proposals).
-* C++23 standard library support for `std::expected` (and C++17 for `std::string_view`).
+The current project is built and tested using the following toolchain:
+* **Build System**: CMake (3.20+)
+* **Compiler**: GCC 16.1.0 or higher (annotation retrieval fails on 16.0.1; requires `-freflection` flag for P2996 support)
+* **Language Standard**: C++26
+* **Dependencies**: GoogleTest (fetched automatically via CMake)
+* **Standard Library**: Requires support for `std::expected` (C++23) and `std::string_view` (C++17).
 ## 📄 License
 
 This project is licensed under the GNU AFFERO GENERAL PUBLIC LICENSE.
