@@ -29,6 +29,7 @@
 #include <string>
 #include <meta>
 #include <stdint.h>
+#include "state_root.hpp"
 
 #if !defined(__cpp_impl_reflection) || __cpp_impl_reflection < 202506L
 #error "state_machine requires C++26 reflection support"
@@ -277,7 +278,7 @@ struct InitialProxyMethod {
     template <typename... Args>
     auto operator()(Args&&... args) {
         auto& fsm_proxy = *reinterpret_cast<FSM*>(reinterpret_cast<char*>(this) + offset);
-        auto& rules = fsm_proxy.__rules__;
+        auto& rules = fsm_proxy.__object__;
 
         std::tuple<Args...> args_tuple(std::forward<Args>(args)...);
         assign_all_args<RulesType, method, Args...>(rules, args_tuple, std::make_index_sequence<sizeof...(Args)>{});
@@ -309,7 +310,7 @@ struct EventProxyMethod {
     template <typename... Args>
     std::expected<void, std::string> operator()(Args&&... args) {
         auto& fsm_proxy = *reinterpret_cast<FSM*>(reinterpret_cast<char*>(this) + offset);
-        auto& rules = fsm_proxy.__rules__;
+        auto& rules = fsm_proxy.__object__;
 
         uint32_t current_state = static_cast<uint32_t>(rules.[:state_mem:]);
 
@@ -552,7 +553,7 @@ template <typename FSM, typename RulesType, std::meta::info method, ptrdiff_t of
 struct AccessorProxyMethod {
     const auto& operator()() const {
         auto& fsm_proxy = *reinterpret_cast<const FSM*>(reinterpret_cast<const char*>(this) + offset);
-        return fsm_proxy.__rules__.[:method:];
+        return fsm_proxy.__object__.[:method:];
     }
 };
 
@@ -560,7 +561,7 @@ template <typename FSM, typename RulesType, std::meta::info state_mem, ptrdiff_t
 struct IsFinalProxyMethod {
     auto operator()() const {
         auto& fsm_proxy = *reinterpret_cast<const FSM*>(reinterpret_cast<const char*>(this) + offset);
-        uint32_t current_state = static_cast<uint32_t>(fsm_proxy.__rules__.[:state_mem:]);
+        uint32_t current_state = static_cast<uint32_t>(fsm_proxy.__object__.[:state_mem:]);
         for (uint32_t i = 0; i < RulesData.num_final_states; ++i) {
             if (current_state == RulesData.final_states[i].state) return true;
         }
@@ -572,7 +573,7 @@ template <typename FSM, typename RulesType, std::meta::info state_mem, ptrdiff_t
 struct IsInitedProxyMethod {
     auto operator()() const {
         auto& fsm_proxy = *reinterpret_cast<const FSM*>(reinterpret_cast<const char*>(this) + offset);
-        return static_cast<uint32_t>(fsm_proxy.__rules__.[:state_mem:]) != 0;
+        return static_cast<uint32_t>(fsm_proxy.__object__.[:state_mem:]) != 0;
     }
 };
 
@@ -584,12 +585,16 @@ consteval auto generate_state_machine_type() {
     
     consteval {
         std::vector<std::meta::info> membersOfInterest;
-        membersOfInterest.push_back(std::meta::data_member_spec(^^Definition, {.name = "__rules__"}));
+        membersOfInterest.push_back(std::meta::data_member_spec(
+            ^^Definition, {.name = "__object__",
+                .annotations = {
+                    std::meta::reflect_constant(state_root{})
+                }}));
 
         struct dummy {
-            alignas(alignof(Definition)) char __rules__[sizeof(Definition)];
+            alignas(alignof(Definition)) char __object__[sizeof(Definition)];
         };
-        constexpr ptrdiff_t objectOffset = -offsetof(dummy, __rules__);
+        constexpr ptrdiff_t objectOffset = -offsetof(dummy, __object__);
 
         static constexpr auto definition_type = ^^Definition;
         static constexpr auto members = std::define_static_array(std::meta::members_of(definition_type, std::meta::access_context::current()));

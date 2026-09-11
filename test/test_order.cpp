@@ -17,10 +17,12 @@
 
 #include <unordered_map>
 #include <yggdrasil/state_machine.hpp>
+#include <yggdrasil/for_each.hpp>
 #include <string>
 #include <string_view>
 #include <cstdint>
 #include <gtest/gtest.h>
+#include <iostream>
 
 using namespace yggdrasil;
 
@@ -327,5 +329,5 @@ TEST(OrderStateMachineTest, TradeMapping) {
     EXPECT_EQ(fsm.cumQty(), 60);
     EXPECT_EQ(fsm.avgPx(), 152.0);
     EXPECT_EQ(trades.size(), 1u);
-    EXPECT_EQ(trades.find("T001"), trades.end());   
+    EXPECT_EQ(trades.find("T001"), trades.end());
 }
