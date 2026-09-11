@@ -144,6 +144,41 @@ You can compile and run it instantly:
 ./examples/run_driver_license.sh
 ```
 
+## 🔗 Contextualization & Serialization
+
+Yggdrasil includes a powerful extension mechanism called **Contextualization**. It allows you to chain a primary object (like a state machine) with one or more auxiliary "target" objects (like a serializer, a logger, or a database writer). When you call an event handler on the contextualized proxy, it invokes the event on the state machine *and* forwards the original event parameters (along with state fields) to the target objects in the same call.
+
+### `yggdrasil::contextualize`
+A function that creates a proxy representing a "chain" of objects. If the primary object's event handler succeeds, the chain delegates execution to the secondary objects. If the primary object's handler returns an error, the chain *short-circuits* and forwards the error, safely preventing side effects on targets.
+
+```cpp
+auto fsm = build_state_machine_type<order_state>{};
+json_serializer serializer;
+
+// Chain the FSM and the serializer together
+auto result_tuple = contextualize(fsm, serializer)
+    .trade("T002", 60, 152.0) // Executes trade on FSM, then calls to_json on serializer
+    .to_json();               // Triggered automatically
+
+auto& [trade_result, json_str] = result_tuple;
+if (trade_result.has_value()) {
+    std::cout << json_str << "\n";
+}
+```
+
+### Reflection Utilities: `yggdrasil::for_each` & `json_serializer`
+To make writing generic targets effortless, Yggdrasil provides a `for_each` reflection utility that deeply visits the struct fields, their runtime values, their names, and all attached C++26 annotations. It transparently handles `state_root` flattening.
+
+The `json_serializer` target leverages `for_each` to dynamically output the exact runtime state of any Yggdrasil state machine as a formatted JSON string.
+
+```cpp
+yggdrasil::for_each(fsm, [](const auto& obj, std::string_view name, const auto& val, const auto&... annotations) {
+    // Dynamically introspect your state machine!
+});
+```
+
+* **JSON Serialization Features**: The built-in `json_serializer` automatically JSON-escapes string fields. For enumerations, it intelligently extracts enumerator names via reflection: matching values are serialized gracefully as `"name(int)"` (e.g., `"order_state": "partially_filled(3)"`).
+
 ## 📝 Detailed Annotations & Features
 
 Yggdrasil uses C++26 reflection to process custom annotations. Here is a detailed breakdown of available annotations:

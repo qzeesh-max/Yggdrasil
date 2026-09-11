@@ -53,11 +53,40 @@ TEST(ContextualizedTest, TradeAndSerialize) {
     EXPECT_TRUE(trade_result.has_value()) << trade_result.error();
     EXPECT_FALSE(json_str.empty());
 
-    // The JSON should contain the field names we care about
-    EXPECT_NE(json_str.find("cumQty"), std::string::npos);
-    EXPECT_NE(json_str.find("avgPx"),  std::string::npos);
+    // The JSON should contain properly serialized enumerations "name(int)"
+    EXPECT_NE(json_str.find("\"order_state\": \"partially_filled(3)\""), std::string::npos)
+        << "Enum formatting incorrect or not found.\nJSON: " << json_str;
+    
+    // Check that original parameter annotations are preserved for trade:
+    // trade(tradeId, fillQty, fillPx) should retain those parameter names.
+    EXPECT_NE(json_str.find("\"tradeId\": \"T002\""), std::string::npos);
+    EXPECT_NE(json_str.find("\"fillQty\": 60"), std::string::npos);
+    EXPECT_NE(json_str.find("\"fillPx\": 152"), std::string::npos);
 
-    std::cout << json_str << std::endl;
+    // Other state checks
+    EXPECT_NE(json_str.find("\"cumQty\": 60"), std::string::npos);
+    EXPECT_NE(json_str.find("\"avgPx\": 152"), std::string::npos);
+}
+
+TEST(ContextualizedTest, StringEscaping) {
+    yggdrasil::build_state_machine_type<order_state> fsm;
+    yggdrasil::json_serializer serializer;
+
+    // Use a symbol with special characters to test string escaping
+    // 'A', '"', 'B', '\n', 'C' -> total 5 chars, fits in 8 char array.
+    fsm.initialize("A\"B\nC", 100u, 150.0, order_state::limit, 0.0);
+    
+    auto result_tuple = yggdrasil::contextualize(fsm, serializer)
+        .new_order(150.0)
+        .to_json();
+
+    auto& [order_result, json_str] = result_tuple;
+    EXPECT_TRUE(order_result.has_value()) << order_result.error();
+    EXPECT_FALSE(json_str.empty());
+
+    // The symbol should be escaped: "A\"B\nC" becomes "A\"B\nC" in JSON (with literal backslashes)
+    EXPECT_NE(json_str.find("\"symbol\": \"A\\\"B\\nC\""), std::string::npos)
+        << "String escaping failed.\nJSON: " << json_str;
 }
 
 TEST(ContextualizedTest, ChainShortCircuitsOnError) {

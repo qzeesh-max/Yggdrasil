@@ -22,16 +22,43 @@
 #include <string_view>
 #include <sstream>
 #include <type_traits>
+#include <iomanip>
 #include "for_each.hpp"
 
 namespace yggdrasil {
+
+// ─── escape_json_string ──────────────────────────────────────────────────────
+
+/// Escapes special characters in a string for JSON representation.
+inline std::string escape_json_string(std::string_view s) {
+    std::ostringstream ss;
+    for (char c : s) {
+        switch (c) {
+            case '"': ss << "\\\""; break;
+            case '\\': ss << "\\\\"; break;
+            case '\b': ss << "\\b"; break;
+            case '\f': ss << "\\f"; break;
+            case '\n': ss << "\\n"; break;
+            case '\r': ss << "\\r"; break;
+            case '\t': ss << "\\t"; break;
+            default:
+                if ('\x00' <= c && c <= '\x1f') {
+                    ss << "\\u" << std::hex << std::setw(4) << std::setfill('0') << static_cast<int>(c);
+                } else {
+                    ss << c;
+                }
+        }
+    }
+    return ss.str();
+}
 
 // ─── to_json_value ───────────────────────────────────────────────────────────
 
 /// Serialize a scalar value to its JSON representation.
 /// - arithmetic types  → std::to_string
-/// - std::string       → quoted string
-/// - char arrays / pointers → quoted string
+/// - enums             → "name(int)" if single enumerator matches, otherwise int
+/// - std::string       → escaped quoted string
+/// - char arrays / pointers → escaped quoted string
 /// - other class types → recursive object (uses template for reflection)
 /// - anything else     → "<unknown>"
 template <typename T>
@@ -39,13 +66,28 @@ std::string to_json_value(const T& val) {
     using U = std::remove_cvref_t<T>;
     if constexpr (std::is_arithmetic_v<U>) {
         return std::to_string(val);
+    } else if constexpr (std::is_enum_v<U>) {
+        using Underlying = std::underlying_type_t<U>;
+        auto int_val = static_cast<Underlying>(val);
+        static constexpr auto enumerators = std::define_static_array(std::meta::enumerators_of(^^U));
+        std::string name;
+        template for (constexpr auto e : enumerators) {
+            if (std::meta::extract<U>(e) == val) {
+                name = std::meta::identifier_of(e);
+                break;
+            }
+        }
+        if (!name.empty()) {
+            return "\"" + name + "(" + std::to_string(int_val) + ")\"";
+        }
+        return std::to_string(int_val);
     } else if constexpr (std::is_same_v<U, std::string>) {
-        return "\"" + val + "\"";
+        return "\"" + escape_json_string(val) + "\"";
     } else if constexpr (std::is_same_v<U, std::string_view>) {
-        return "\"" + std::string(val) + "\"";
+        return "\"" + escape_json_string(val) + "\"";
     } else if constexpr (std::is_array_v<std::remove_reference_t<T>> ||
                          std::is_pointer_v<U>) {
-        return "\"" + std::string(val) + "\"";
+        return "\"" + escape_json_string(val) + "\"";
     } else if constexpr (std::is_class_v<U>) {
         // Recurse into class fields using compile-time reflection.
         std::ostringstream ss;
