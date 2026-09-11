@@ -61,7 +61,15 @@ consteval void suffix_name(std::string& str, int index) {
 
 // Build a new aggregate type whose fields are:
 //   [PrevAgg fields as refs] + [Target non-empty fields as refs] + [Args as refs]
-template <typename PrevAgg, typename Target, std::meta::info callable, typename... Args>
+//
+// callable     – the function actually being called (for return-type deduction).
+// param_source – the function whose parameter list is used for naming the arg_*
+//   fields.  For direct functions these are the same.  For Yggdrasil proxy
+//   members, callable is the proxy's operator() (no named params) while
+//   param_source is the original on-handler that carries named params.
+template <typename PrevAgg, typename Target,
+          std::meta::info callable, std::meta::info param_source,
+          typename... Args>
 consteval auto generate_chain_agg_type() {
     struct GeneratedAgg;
     consteval {
@@ -114,13 +122,16 @@ consteval auto generate_chain_agg_type() {
         }
 
         size_t param_idx = std::is_same_v<PrevAgg, empty_agg> ? 0 : 1;
-        constexpr bool has_params = requires { std::meta::parameters_of(callable); };
+        // Use param_source (not callable) for parameter name lookup — for proxy
+        // members these differ: callable is operator() with no named params,
+        // while param_source is the original function with named params.
+        constexpr bool has_params = requires { std::meta::parameters_of(param_source); };
         static constexpr auto arg_types = std::define_static_array(std::vector<std::meta::info>{ ^^Args... });
 
         template for (constexpr auto arg_type : arg_types) {
             std::string p_name = "arg";
             if constexpr (has_params) {
-                static constexpr auto params = std::define_static_array(std::meta::parameters_of(callable));
+                static constexpr auto params = std::define_static_array(std::meta::parameters_of(param_source));
                 if (param_idx < params.size()) {
                     auto p = params[param_idx];
                     if (std::meta::has_identifier(p)) {
@@ -158,6 +169,30 @@ consteval std::meta::info get_chain_callable_info(std::meta::info mem) {
     }
     return ^^void;
 }
+
+// For proxy data members that expose a `static constexpr std::meta::info original_method_v`
+// (e.g. Yggdrasil's EventProxyMethod), discover the original on-handler function so that
+// its parameter names can be used to name the arg_* fields in the generated aggregate.
+// Falls back to get_chain_callable_info (the proxy's operator()) when no such member exists.
+consteval std::meta::info get_param_source_callable(std::meta::info mem) {
+    if (std::meta::is_function(mem)) return mem;
+    if (std::meta::is_nonstatic_data_member(mem)) {
+        auto t = std::meta::type_of(mem);
+        // Look for "original_method_v" — a static constexpr std::meta::info member that
+        // proxy types can expose to publish the original function they wrap.
+        for (auto mm : std::meta::members_of(t, std::meta::access_context::current())) {
+            if (std::meta::is_variable(mm) && std::meta::has_identifier(mm) &&
+                std::meta::identifier_of(mm) == "original_method_v") {
+                // Extract the std::meta::info value stored in the static member.
+                auto original_fn = std::meta::extract<std::meta::info>(mm);
+                if (std::meta::is_function(original_fn)) return original_fn;
+            }
+        }
+    }
+    // Fall back: use the same callable as for invocation.
+    return get_chain_callable_info(mem);
+}
+
 
 // ─── chain_state ─────────────────────────────────────────────────────────────
 
@@ -198,7 +233,13 @@ struct ChainProxyMethod {
 
         auto& target = std::get<NextObjectIndex>(state.chain);
 
-        constexpr auto agg_type_id = generate_chain_agg_type<PrevAgg, TargetType, callable, Args...>();
+        // param_source: the function whose parameter list supplies field names for
+        // the arg_* members of the aggregate.  For direct functions this equals
+        // callable.  For Yggdrasil proxy members it is the original on-handler
+        // (embedded as a template argument of the proxy type) which carries the
+        // real parameter names (tradeId, fillQty, fillPx, …).
+        constexpr auto param_source = get_param_source_callable(mem);
+        constexpr auto agg_type_id = generate_chain_agg_type<PrevAgg, TargetType, callable, param_source, Args...>();
         using AggType = typename decltype(agg_type_id)::type;
         auto args_tuple = std::forward_as_tuple(args...);
 

@@ -307,6 +307,11 @@ struct InitialProxyMethod {
 
 template <typename FSM, typename RulesType, std::meta::info method, ptrdiff_t offset, fixed_state_rules RulesData, std::meta::info state_mem>
 struct EventProxyMethod {
+    // Expose the original on-handler so that generic reflection tools (e.g.
+    // yggdrasil::contextualize) can retrieve parameter names without having to
+    // parse template-argument lists.
+    static constexpr std::meta::info original_method_v = method;
+
     template <typename... Args>
     std::expected<void, std::string> operator()(Args&&... args) {
         auto& fsm_proxy = *reinterpret_cast<FSM*>(reinterpret_cast<char*>(this) + offset);
