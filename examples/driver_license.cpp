@@ -20,6 +20,9 @@
 #include <unordered_map>
 #include <iostream>
 
+#include <yggdrasil/contextualize.hpp>
+#include <yggdrasil/json.hpp>
+
 using namespace yggdrasil;
 
 // A demonstration of a real-world state machine for a DMV Driver's License process.
@@ -75,6 +78,8 @@ struct driver_license_fsm : state_machine {
     };
 
     using citation_map_t = std::unordered_map<std::string, citation_data_t, hasher, std::equal_to<>>;
+    
+    [[=json_dumpable{}]]
     citation_map_t citations;
 
     // 3. Topology & Endpoints
@@ -223,6 +228,20 @@ int main() {
     // pay_fines has [[=can_revert_final{}]] which overrides the final state restriction
     check(fsm.pay_fines());
     
+    // 9. Contextualization & JSON Serialization
+    std::cout << "\n--- JSON Serialization Example ---\n";
+    yggdrasil::json_serializer serializer;
+    // We can chain the FSM and the JSON serializer together.
+    // The event is applied, and then the JSON representation of the new state is generated.
+    auto [res, json_output] = contextualize(fsm, serializer)
+        .issue_citation("T-005", "Expired Registration", 2)
+        .to_json();
+    
+    check(res);
+    if (res.has_value()) {
+        std::cout << "Final FSM State JSON:\n" << json_output << "\n";
+    }
+
     std::cout << "\nExample complete!\n";
     return 0;
 }

@@ -36,7 +36,12 @@ add_executable(test_contextualized test/test_contextualized.cpp)
 target_include_directories(test_contextualized PRIVATE test)
 target_link_libraries(test_contextualized PRIVATE yggdrasil gtest_main)
 
+add_executable(test_json_dumpable test/test_json_dumpable.cpp)
+target_include_directories(test_json_dumpable PRIVATE test)
+target_link_libraries(test_json_dumpable PRIVATE yggdrasil gtest_main)
+
 include(GoogleTest)
 gtest_discover_tests(test_order)
 gtest_discover_tests(test_contextualized)
+gtest_discover_tests(test_json_dumpable)
 

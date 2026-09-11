@@ -27,6 +27,10 @@
 
 namespace yggdrasil {
 
+// ─── Annotations ─────────────────────────────────────────────────────────────
+
+struct json_dumpable {};
+
 // ─── escape_json_string ──────────────────────────────────────────────────────
 
 /// Escapes special characters in a string for JSON representation.
@@ -135,11 +139,25 @@ struct json_serializer {
         yggdrasil::for_each(obj, [&](const auto& /*obj*/,
                                      std::string_view name,
                                      const auto& value,
-                                     const auto&... /*annotations*/)
+                                     const auto&... annotations)
         {
             if (!first) ss << ", ";
             first = false;
-            ss << "\"" << name << "\": " << to_json_value(value);
+            ss << "\"" << name << "\": ";
+
+            constexpr bool has_dumpable = (std::is_same_v<std::remove_cvref_t<decltype(annotations)>, json_dumpable> || ...);
+            if constexpr (has_dumpable) {
+                ss << "[";
+                bool first_elem = true;
+                for (const auto& elem : value) {
+                    if (!first_elem) ss << ", ";
+                    first_elem = false;
+                    ss << to_json_value(elem);
+                }
+                ss << "]";
+            } else {
+                ss << to_json_value(value);
+            }
         });
 
         ss << "}";
