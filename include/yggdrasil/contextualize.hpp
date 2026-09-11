@@ -189,15 +189,33 @@ consteval auto generate_chain_agg_type() {
     }
 }
 
-consteval std::meta::info get_chain_callable_info(std::meta::info mem) {
-    if (std::meta::is_function(mem)) return mem;
-    if (std::meta::is_nonstatic_data_member(mem)) {
-        auto t = std::meta::type_of(mem);
-        for (auto mm : std::meta::members_of(t, std::meta::access_context::current())) {
-            if (std::meta::is_function(mm)) return mm;
+template <typename T>
+consteval std::meta::info get_callable_from_type_helper() {
+    if constexpr (std::is_class_v<T>) {
+        if constexpr (requires { sizeof(T); }) {
+            for (auto mm : std::meta::members_of(^^T, std::meta::access_context::current())) {
+                if (std::meta::is_function(mm)) return mm;
+            }
         }
     }
-    if (!std::meta::is_type(mem) &&
+    return ^^void;
+}
+
+template <std::meta::info mem>
+consteval std::meta::info get_chain_callable_info() {
+    if constexpr (std::meta::is_function(mem)) return mem;
+    else if constexpr (std::meta::is_nonstatic_data_member(mem)) {
+        constexpr auto t = std::meta::type_of(mem);
+        std::meta::info callable = ^^void;
+        auto extract_fn = [&]<typename T>() {
+            callable = get_callable_from_type_helper<std::remove_cvref_t<T>>();
+        };
+        template for (constexpr auto type_info : {t}) {
+            extract_fn.template operator()<typename [:type_info:]>();
+        }
+        if (callable != ^^void) return callable;
+    }
+    if constexpr (!std::meta::is_type(mem) &&
         !std::meta::is_nonstatic_data_member(mem) &&
         !std::meta::is_enumerator(mem)) {
         return mem;
@@ -209,23 +227,38 @@ consteval std::meta::info get_chain_callable_info(std::meta::info mem) {
 // (e.g. Yggdrasil's EventProxyMethod), discover the original on-handler function so that
 // its parameter names can be used to name the arg_* fields in the generated aggregate.
 // Falls back to get_chain_callable_info (the proxy's operator()) when no such member exists.
-consteval std::meta::info get_param_source_callable(std::meta::info mem) {
-    if (std::meta::is_function(mem)) return mem;
-    if (std::meta::is_nonstatic_data_member(mem)) {
-        auto t = std::meta::type_of(mem);
-        // Look for "original_method_v" — a static constexpr std::meta::info member that
-        // proxy types can expose to publish the original function they wrap.
-        for (auto mm : std::meta::members_of(t, std::meta::access_context::current())) {
-            if (std::meta::is_variable(mm) && std::meta::has_identifier(mm) &&
-                std::meta::identifier_of(mm) == "original_method_v") {
-                // Extract the std::meta::info value stored in the static member.
-                auto original_fn = std::meta::extract<std::meta::info>(mm);
-                if (std::meta::is_function(original_fn)) return original_fn;
+template <typename T>
+consteval std::meta::info get_param_source_callable_helper() {
+    if constexpr (std::is_class_v<T>) {
+        if constexpr (requires { sizeof(T); }) {
+            for (auto mm : std::meta::members_of(^^T, std::meta::access_context::current())) {
+                if (std::meta::is_variable(mm) && std::meta::has_identifier(mm) &&
+                    std::meta::identifier_of(mm) == "original_method_v") {
+                    auto original_fn = std::meta::extract<std::meta::info>(mm);
+                    if (std::meta::is_function(original_fn)) return original_fn;
+                }
             }
         }
     }
+    return ^^void;
+}
+
+template <std::meta::info mem>
+consteval std::meta::info get_param_source_callable() {
+    if constexpr (std::meta::is_function(mem)) return mem;
+    else if constexpr (std::meta::is_nonstatic_data_member(mem)) {
+        constexpr auto t = std::meta::type_of(mem);
+        std::meta::info original = ^^void;
+        auto extract_fn = [&]<typename T>() {
+            original = get_param_source_callable_helper<std::remove_cvref_t<T>>();
+        };
+        template for (constexpr auto type_info : {t}) {
+            extract_fn.template operator()<typename [:type_info:]>();
+        }
+        if (original != ^^void) return original;
+    }
     // Fall back: use the same callable as for invocation.
-    return get_chain_callable_info(mem);
+    return get_chain_callable_info<mem>();
 }
 
 
@@ -252,6 +285,12 @@ struct ChainProxyMethod;
 template <typename State, size_t NextObjectIndex>
 consteval auto generate_chain_proxy();
 
+template <typename T> struct is_expected_type : std::false_type {};
+template <typename T, typename E> struct is_expected_type<std::expected<T, E>> : std::true_type {};
+
+template <typename T> struct expected_err_type { using type = std::string; };
+template <typename T, typename E> struct expected_err_type<std::expected<T, E>> { using type = E; };
+
 template <typename Proxy, typename State, size_t NextObjectIndex,
           std::meta::info mem, std::meta::info callable, ptrdiff_t objectOffset>
 struct ChainProxyMethod {
@@ -273,7 +312,7 @@ struct ChainProxyMethod {
         // callable.  For Yggdrasil proxy members it is the original on-handler
         // (embedded as a template argument of the proxy type) which carries the
         // real parameter names (tradeId, fillQty, fillPx, …).
-        constexpr auto param_source = get_param_source_callable(mem);
+        constexpr auto param_source = get_param_source_callable<mem>();
         constexpr auto agg_type_id = generate_chain_agg_type<PrevAgg, TargetType, callable, param_source, Args...>();
         using AggType = typename decltype(agg_type_id)::type;
         auto args_tuple = std::forward_as_tuple(args...);
@@ -338,6 +377,8 @@ struct ChainProxyMethod {
             if (state.has_error) {
                 if constexpr (std::is_void_v<ResType>)
                     return SlotType{std::unexpected(std::string("skipped"))};
+                else if constexpr (is_expected_type<ResType>::value)
+                    return SlotType{std::unexpected(typename expected_err_type<ResType>::type("skipped"))};
                 else
                     return SlotType{};
             }
@@ -393,7 +434,7 @@ consteval auto generate_chain_proxy() {
         static constexpr auto tgt_members = std::define_static_array(
             std::meta::members_of(^^TargetType, std::meta::access_context::current()));
         template for (constexpr auto mem : tgt_members) {
-            constexpr auto callable = get_chain_callable_info(mem);
+            constexpr auto callable = get_chain_callable_info<mem>();
             if constexpr ((callable != ^^void) && std::meta::has_identifier(mem)) {
                 proxy_members.push_back(std::meta::data_member_spec(
                     ^^ChainProxyMethod<Proxy, State, NextObjectIndex, mem, callable, objectOffset>,

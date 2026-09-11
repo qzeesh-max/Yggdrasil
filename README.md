@@ -177,7 +177,9 @@ yggdrasil::for_each(fsm, [](const auto& obj, std::string_view name, const auto& 
 });
 ```
 
-* **JSON Serialization Features**: The built-in `json_serializer` automatically JSON-escapes string fields. For enumerations, it intelligently extracts enumerator names via reflection: matching values are serialized gracefully as `"name(int)"` (e.g., `"order_state": "partially_filled(3)"`).
+* **JSON Serialization Features**: 
+  * The built-in `json_serializer` automatically handles proper JSON string escaping (e.g., quotes, backslashes, control characters). 
+  * For enumerations, it intelligently extracts enumerator names via C++26 reflection. If the enumeration value exactly matches a known enumerator, it is serialized gracefully as `"name(underlying_value)"` (e.g., `"order_state": "partially_filled(3)"`). If the value cannot be resolved (e.g., due to bitwise combinations or unmapped values), it falls back to serializing strictly as the underlying integer type.
 
 ## 📝 Detailed Annotations & Features
 
@@ -216,6 +218,7 @@ Yggdrasil's reflection capabilities let you define and process your own custom a
     std::string symbol;
     ```
 *   Use `yggdrasil::for_each` inside a generic generator target to query `std::meta::annotations_of` and map fields exactly as needed for protocols like FIX or JSON!
+*   **FIX Message Generation Example**: As seen in `examples/fix_order.cpp`, you can chain your FSM with a contextualized FIX generator. By matching annotations to tag numbers and enum value strings, a chained `to_fix` call can instantly spit out compliant, pipe-delimited FIX protocol strings on a successful FSM state transition!
 
 ### Transition Control & Errors
 

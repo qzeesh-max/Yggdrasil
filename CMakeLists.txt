@@ -40,6 +40,10 @@ add_executable(test_json_dumpable test/test_json_dumpable.cpp)
 target_include_directories(test_json_dumpable PRIVATE test)
 target_link_libraries(test_json_dumpable PRIVATE yggdrasil gtest_main)
 
+add_executable(test_contextualize_chaining test/test_contextualize_chaining.cpp)
+target_include_directories(test_contextualize_chaining PRIVATE test)
+target_link_libraries(test_contextualize_chaining PRIVATE yggdrasil gtest_main)
+
 add_executable(driver_license examples/driver_license.cpp)
 target_link_libraries(driver_license PRIVATE yggdrasil)
 
@@ -50,4 +54,5 @@ include(GoogleTest)
 gtest_discover_tests(test_order)
 gtest_discover_tests(test_contextualized)
 gtest_discover_tests(test_json_dumpable)
+gtest_discover_tests(test_contextualize_chaining)
 
