@@ -149,7 +149,7 @@ You can compile and run it instantly:
 Yggdrasil includes a powerful extension mechanism called **Contextualization**. It allows you to chain a primary object (like a state machine) with one or more auxiliary "target" objects (like a serializer, a logger, or a database writer). When you call an event handler on the contextualized proxy, it invokes the event on the state machine *and* forwards the original event parameters (along with state fields) to the target objects in the same call.
 
 ### `yggdrasil::contextualize`
-A function that creates a proxy representing a "chain" of objects. If the primary object's event handler succeeds, the chain delegates execution to the secondary objects. If the primary object's handler returns an error, the chain *short-circuits* and forwards the error, safely preventing side effects on targets.
+A function that creates a proxy representing a "chain" of objects. When an event is executed, the proxy evaluates the event against the primary object and returns a *new proxy* targeted at the next object in the chain. If the primary object's handler returns an error, the chain *short-circuits* and safely bypasses the downstream targets while preserving the error return.
 
 ```cpp
 auto fsm = build_state_machine_type<order_state>{};
@@ -157,8 +157,8 @@ json_serializer serializer;
 
 // Chain the FSM and the serializer together
 auto result_tuple = contextualize(fsm, serializer)
-    .trade("T002", 60, 152.0) // Executes trade on FSM, then calls to_json on serializer
-    .to_json();               // Triggered automatically
+    .trade("T002", 60, 152.0) // Executes trade on FSM, generating a proxy for the next target
+    .to_json();               // Executes to_json on the serializer with the event's data context
 
 auto& [trade_result, json_str] = result_tuple;
 if (trade_result.has_value()) {
@@ -222,6 +222,7 @@ Yggdrasil's reflection capabilities let you define and process your own custom a
 
 ### Transition Control & Errors
 
+*   `-> any_of<State1, State2, ...>` (return type constraint): Restricts the event handler to only transition to one of the specified states, ensuring strict compile-time verification of your state topology.
 *   `-> final` (return type constraint): Marks the target state of a transition as a final state.
 *   `[[=can_revert_final{}]]`: Attached to an event handler, it explicitly overrides the final state lockout, allowing the FSM to transition out of a final state.
 *   `[[=on_error("message")]]`: Provides a custom, rich error message when a transition is rejected or when a duplicate map key is detected.
