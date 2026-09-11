@@ -1,0 +1,366 @@
+// Yggdrasil
+// Copyright (C) 2026 Zeeshan Qazi
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published
+// by the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+//
+
+#ifndef YGGDRASIL_CONTEXTUALIZE_HPP
+#define YGGDRASIL_CONTEXTUALIZE_HPP
+
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <string_view>
+#include <meta>
+#include <vector>
+#include <array>
+#include <string>
+#include <expected>
+
+namespace yggdrasil {
+
+// ─── Internal helpers ─────────────────────────────────────────────────────────
+
+namespace detail {
+
+struct empty_agg {};
+
+// Evaluate whether a call result constitutes success.
+// Supports: bool-convertible types, std::expected / std::optional (.has_value()).
+template <typename T>
+constexpr bool evaluate_chain_result(const T& res) {
+    if constexpr (requires { static_cast<bool>(res); }) {
+        return static_cast<bool>(res);
+    } else if constexpr (requires { res.has_value(); }) {
+        return res.has_value();
+    } else {
+        return true;
+    }
+}
+
+consteval void suffix_name(std::string& str, int index) {
+    if (index == 0) { str += "_0"; return; }
+    std::string num;
+    while (index > 0) {
+        num = static_cast<char>('0' + (index % 10)) + num;
+        index /= 10;
+    }
+    str += "_" + num;
+}
+
+// Build a new aggregate type whose fields are:
+//   [PrevAgg fields as refs] + [Target non-empty fields as refs] + [Args as refs]
+template <typename PrevAgg, typename Target, std::meta::info callable, typename... Args>
+consteval auto generate_chain_agg_type() {
+    struct GeneratedAgg;
+    consteval {
+        std::vector<std::meta::info> members;
+        std::vector<std::string> used_names;
+
+        auto add_member = [&](std::meta::info type, std::string_view base_name,
+                              std::vector<std::meta::info> anns = {}) {
+            std::string name(base_name);
+            size_t count = 0;
+            while (true) {
+                bool conflict = false;
+                for (const auto& un : used_names) {
+                    if (un == name) { conflict = true; break; }
+                }
+                if (!conflict) break;
+                count++;
+                name = std::string(base_name) + "_" + std::to_string(count);
+            }
+            used_names.push_back(name);
+            members.push_back(std::meta::data_member_spec(type, {
+                .name        = name,
+                .annotations = std::move(anns),
+            }));
+        };
+
+        if constexpr (!std::is_same_v<PrevAgg, empty_agg>) {
+            static constexpr auto prev_members = std::define_static_array(
+                std::meta::nonstatic_data_members_of(^^PrevAgg, std::meta::access_context::current()));
+            template for (constexpr auto amem : prev_members) {
+                // Propagate annotations that were carried from the original member
+                // into the previous aggregate — keep them alive through the chain.
+                add_member(std::meta::type_of(amem), std::meta::identifier_of(amem),
+                           std::vector(std::meta::annotations_of(amem)));
+            }
+        }
+
+        static constexpr auto tgt_members = std::define_static_array(
+            std::meta::nonstatic_data_members_of(^^Target, std::meta::access_context::current()));
+        template for (constexpr auto amem : tgt_members) {
+            using MemType = std::remove_cvref_t<typename [: std::meta::type_of(amem) :]>;
+            if constexpr (!(std::is_class_v<MemType> && std::is_empty_v<MemType>)) {
+                using RefType = std::add_lvalue_reference_t<typename [: std::meta::type_of(amem) :]>;
+                // Preserve all annotations from the original data member so that
+                // downstream visitors (e.g. for_each, json_serializer) see the
+                // same annotation set on the context aggregate's reference fields.
+                add_member(^^RefType, std::meta::identifier_of(amem),
+                           std::vector(std::meta::annotations_of(amem)));
+            }
+        }
+
+        size_t param_idx = std::is_same_v<PrevAgg, empty_agg> ? 0 : 1;
+        constexpr bool has_params = requires { std::meta::parameters_of(callable); };
+        static constexpr auto arg_types = std::define_static_array(std::vector<std::meta::info>{ ^^Args... });
+
+        template for (constexpr auto arg_type : arg_types) {
+            std::string p_name = "arg";
+            if constexpr (has_params) {
+                static constexpr auto params = std::define_static_array(std::meta::parameters_of(callable));
+                if (param_idx < params.size()) {
+                    auto p = params[param_idx];
+                    if (std::meta::has_identifier(p)) {
+                        p_name = std::meta::identifier_of(p);
+                    } else {
+                        suffix_name(p_name, param_idx);
+                    }
+                } else {
+                    suffix_name(p_name, param_idx);
+                }
+            } else {
+                suffix_name(p_name, param_idx);
+            }
+            add_member(arg_type, p_name);
+            param_idx++;
+        }
+
+        std::meta::define_aggregate(^^GeneratedAgg, members);
+    }
+    return std::type_identity<GeneratedAgg>{};
+}
+
+consteval std::meta::info get_chain_callable_info(std::meta::info mem) {
+    if (std::meta::is_function(mem)) return mem;
+    if (std::meta::is_nonstatic_data_member(mem)) {
+        auto t = std::meta::type_of(mem);
+        for (auto mm : std::meta::members_of(t, std::meta::access_context::current())) {
+            if (std::meta::is_function(mm)) return mm;
+        }
+    }
+    if (!std::meta::is_type(mem) &&
+        !std::meta::is_nonstatic_data_member(mem) &&
+        !std::meta::is_enumerator(mem)) {
+        return mem;
+    }
+    return ^^void;
+}
+
+// ─── chain_state ─────────────────────────────────────────────────────────────
+
+template <typename ChainTuple_, typename ResultTuple_, typename PrevAgg_>
+struct chain_state {
+    using ChainTuple  = ChainTuple_;
+    using ResultTuple = ResultTuple_;
+    using PrevAgg     = PrevAgg_;
+
+    ChainTuple  chain;
+    ResultTuple results;
+    PrevAgg     prev_agg;
+    bool        has_error;
+};
+
+// ─── ChainProxy / ChainProxyMethod ───────────────────────────────────────────
+
+template <typename Proxy, typename State, size_t NextObjectIndex,
+          std::meta::info mem, std::meta::info callable, ptrdiff_t objectOffset>
+struct ChainProxyMethod;
+
+template <typename State, size_t NextObjectIndex>
+consteval auto generate_chain_proxy();
+
+template <typename Proxy, typename State, size_t NextObjectIndex,
+          std::meta::info mem, std::meta::info callable, ptrdiff_t objectOffset>
+struct ChainProxyMethod {
+    template <typename... Args>
+    auto operator()(Args&&... args) {
+        auto& state = *reinterpret_cast<State*>(
+            reinterpret_cast<char*>(this) + objectOffset);
+
+        constexpr bool is_last =
+            (NextObjectIndex == (std::tuple_size_v<typename State::ChainTuple> - 1));
+
+        using TargetType = std::remove_cvref_t<std::tuple_element_t<NextObjectIndex, typename State::ChainTuple>>;
+        using PrevAgg    = typename State::PrevAgg;
+
+        auto& target = std::get<NextObjectIndex>(state.chain);
+
+        constexpr auto agg_type_id = generate_chain_agg_type<PrevAgg, TargetType, callable, Args...>();
+        using AggType = typename decltype(agg_type_id)::type;
+        auto args_tuple = std::forward_as_tuple(args...);
+
+        auto prev_tup = []<typename P>(P& p) {
+            if constexpr (std::is_same_v<P, empty_agg>) return std::tuple<>{};
+            else {
+                static constexpr auto prev_members = std::define_static_array(
+                    std::meta::nonstatic_data_members_of(^^P, std::meta::access_context::current()));
+                return [&]<size_t... Is>(std::index_sequence<Is...>) {
+                    return std::tuple_cat(
+                        []<size_t I>(P& p_) {
+                            constexpr auto pm = prev_members[I];
+                            return std::forward_as_tuple(p_.[:pm:]);
+                        }.template operator()<Is>(p)...
+                    );
+                }(std::make_index_sequence<prev_members.size()>{});
+            }
+        }(state.prev_agg);
+
+        auto tgt_tup = []<typename T>(T& t) {
+            static constexpr auto tgt_members = std::define_static_array(
+                std::meta::nonstatic_data_members_of(^^T, std::meta::access_context::current()));
+            return [&]<size_t... Is>(std::index_sequence<Is...>) {
+                return std::tuple_cat(
+                    []<size_t I>(T& t_) {
+                        constexpr auto tm = tgt_members[I];
+                        using MemType = std::remove_cvref_t<typename [: std::meta::type_of(tm) :]>;
+                        if constexpr (!(std::is_class_v<MemType> && std::is_empty_v<MemType>)) {
+                            return std::forward_as_tuple(t_.[:tm:]);
+                        } else {
+                            return std::tuple<>{};
+                        }
+                    }.template operator()<Is>(t)...
+                );
+            }(std::make_index_sequence<tgt_members.size()>{});
+        }(target);
+
+        auto all_fields = std::tuple_cat(prev_tup, tgt_tup, args_tuple);
+        auto next_agg   = std::make_from_tuple<AggType>(all_fields);
+
+        auto _res_type_id = [&]() {
+            if constexpr (std::is_same_v<PrevAgg, empty_agg>) {
+                return std::type_identity<std::remove_cvref_t<
+                    decltype(target.[:mem:](std::forward<Args>(args)...))>>{};
+            } else {
+                return std::type_identity<std::remove_cvref_t<
+                    decltype(target.[:mem:](state.prev_agg, std::forward<Args>(args)...))>>{};
+            }
+        }();
+        using ResType  = typename decltype(_res_type_id)::type;
+        using SlotType = std::conditional_t<std::is_void_v<ResType>,
+                                            std::expected<void, std::string>,
+                                            ResType>;
+
+        using CombinedResultsType = decltype(std::tuple_cat(
+            std::declval<typename State::ResultTuple>(),
+            std::declval<std::tuple<SlotType>>()
+        ));
+
+        SlotType slot = [&]() -> SlotType {
+            if (state.has_error) {
+                if constexpr (std::is_void_v<ResType>)
+                    return SlotType{std::unexpected(std::string("skipped"))};
+                else
+                    return SlotType{};
+            }
+            if constexpr (std::is_same_v<PrevAgg, empty_agg>) {
+                if constexpr (std::is_void_v<ResType>) {
+                    target.[:mem:](std::forward<Args>(args)...);
+                    return SlotType{};
+                } else {
+                    return target.[:mem:](std::forward<Args>(args)...);
+                }
+            } else {
+                if constexpr (std::is_void_v<ResType>) {
+                    target.[:mem:](state.prev_agg, std::forward<Args>(args)...);
+                    return SlotType{};
+                } else {
+                    return target.[:mem:](state.prev_agg, std::forward<Args>(args)...);
+                }
+            }
+        }();
+
+        bool new_has_error = state.has_error || !evaluate_chain_result(slot);
+        CombinedResultsType combined_results = std::tuple_cat(
+            std::move(state.results),
+            std::make_tuple(std::move(slot))
+        );
+
+        if constexpr (is_last) {
+            return combined_results;
+        } else {
+            using NextState = chain_state<typename State::ChainTuple, CombinedResultsType, AggType>;
+            constexpr auto next_proxy_id = generate_chain_proxy<NextState, NextObjectIndex + 1>();
+            using NextProxy = typename decltype(next_proxy_id)::type;
+            return NextProxy{ NextState{state.chain, std::move(combined_results), std::move(next_agg), new_has_error} };
+        }
+    }
+};
+
+template <typename State, size_t NextObjectIndex>
+consteval auto generate_chain_proxy() {
+    struct Proxy;
+    consteval {
+        std::vector<std::meta::info> proxy_members;
+        proxy_members.push_back(std::meta::data_member_spec(^^State, {.name = "state"}));
+
+        struct dummy {
+            alignas(alignof(State)) char state[sizeof(State)];
+        };
+        constexpr ptrdiff_t objectOffset = -offsetof(dummy, state);
+
+        using CurrentTarget = std::tuple_element_t<NextObjectIndex, typename State::ChainTuple>;
+        using TargetType    = std::remove_cvref_t<CurrentTarget>;
+
+        static constexpr auto tgt_members = std::define_static_array(
+            std::meta::members_of(^^TargetType, std::meta::access_context::current()));
+        template for (constexpr auto mem : tgt_members) {
+            constexpr auto callable = get_chain_callable_info(mem);
+            if constexpr ((callable != ^^void) && std::meta::has_identifier(mem)) {
+                proxy_members.push_back(std::meta::data_member_spec(
+                    ^^ChainProxyMethod<Proxy, State, NextObjectIndex, mem, callable, objectOffset>,
+                    {.name = std::meta::identifier_of(mem), .no_unique_address = true}
+                ));
+            }
+        }
+        std::meta::define_aggregate(^^Proxy, proxy_members);
+    }
+    return std::type_identity<Proxy>{};
+}
+
+} // namespace detail
+
+// ─── Public API ──────────────────────────────────────────────────────────────
+
+/// contextualize(obj1, obj2, ...)
+///
+/// Returns a chain proxy that lets you call methods on obj1, then obj2, etc.
+/// Each step receives a context aggregate containing all previous outputs plus
+/// the current object's fields as references.  If any step returns a falsy or
+/// error result, subsequent steps are skipped and a neutral slot is returned.
+///
+/// Usage:
+///   auto [r1, r2] = yggdrasil::contextualize(fsm, serializer)
+///       .trade("T001", 40u, 150.0)
+///       .to_json();
+template <typename... Objects>
+auto contextualize(Objects&... objects) {
+    using InitialState = detail::chain_state<
+        std::tuple<Objects&...>,
+        std::tuple<>,
+        detail::empty_agg>;
+    constexpr auto proxy_id = detail::generate_chain_proxy<InitialState, 0>();
+    using ProxyType = typename decltype(proxy_id)::type;
+    return ProxyType{InitialState{
+        std::forward_as_tuple(objects...),
+        std::tuple<>{},
+        detail::empty_agg{},
+        false
+    }};
+}
+
+} // namespace yggdrasil
+
+#endif // !defined(YGGDRASIL_CONTEXTUALIZE_HPP)

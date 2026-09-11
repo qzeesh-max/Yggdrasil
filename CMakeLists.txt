@@ -20,8 +20,23 @@ FetchContent_MakeAvailable(googletest)
 add_library(yggdrasil INTERFACE)
 target_include_directories(yggdrasil INTERFACE include)
 
+# bilroest is now a forwarding shim inside include/bilroest/ which is already
+# on the yggdrasil include path. Keep the alias target for any external code
+# that links against 'bilroest' by name.
+add_library(bilroest INTERFACE)
+target_link_libraries(bilroest INTERFACE yggdrasil)
+
 enable_testing()
+
 add_executable(test_order test/test_order.cpp)
+target_include_directories(test_order PRIVATE test)
 target_link_libraries(test_order PRIVATE yggdrasil gtest_main)
+
+add_executable(test_contextualized test/test_contextualized.cpp)
+target_include_directories(test_contextualized PRIVATE test)
+target_link_libraries(test_contextualized PRIVATE yggdrasil gtest_main)
+
 include(GoogleTest)
 gtest_discover_tests(test_order)
+gtest_discover_tests(test_contextualized)
+

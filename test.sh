@@ -24,5 +24,5 @@ set -e
 
 echo "Running tests..."
 cd build
-ctest --output-on-failure
+ctest -V # --output-on-failure
 cd ..
