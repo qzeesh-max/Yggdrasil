@@ -203,6 +203,19 @@ Yggdrasil uses C++26 reflection to process custom annotations. Here is a detaile
 
 *   `[[=mapping<^^collection_name>{}]]`: Attached to an event handler, it tells Yggdrasil to automatically insert the event data into a specified `std::unordered_map` (e.g., `collection_name`).
 *   `[[=storage_key{}]]`: Used in tandem with `[[=mapping<...>{}]]`. It marks a specific parameter in the event handler to be used as the map's key. 
+*   `[[=json_dumpable{}]]`: Attached to a collection (e.g. `std::vector`, `std::unordered_map`), it signals the `json_serializer` to deeply iterate and serialize the collection into a JSON array or dictionary object.
+
+### Custom Reflection Output & Extensibility
+
+Yggdrasil's reflection capabilities let you define and process your own custom annotations for serialization and protocol generation (e.g., FIX engine generation).
+
+*   You can define a custom struct annotation, such as `struct FixField { int tag; };` or `struct FixFieldValue { char val; };`.
+*   Attach these annotations directly to fields or enumerators in your state struct:
+    ```cpp
+    [[=FixField{55}]]
+    std::string symbol;
+    ```
+*   Use `yggdrasil::for_each` inside a generic generator target to query `std::meta::annotations_of` and map fields exactly as needed for protocols like FIX or JSON!
 
 ### Transition Control & Errors
 

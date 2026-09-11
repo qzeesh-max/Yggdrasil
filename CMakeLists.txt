@@ -40,6 +40,12 @@ add_executable(test_json_dumpable test/test_json_dumpable.cpp)
 target_include_directories(test_json_dumpable PRIVATE test)
 target_link_libraries(test_json_dumpable PRIVATE yggdrasil gtest_main)
 
+add_executable(driver_license examples/driver_license.cpp)
+target_link_libraries(driver_license PRIVATE yggdrasil)
+
+add_executable(fix_order examples/fix_order.cpp)
+target_link_libraries(fix_order PRIVATE yggdrasil)
+
 include(GoogleTest)
 gtest_discover_tests(test_order)
 gtest_discover_tests(test_contextualized)

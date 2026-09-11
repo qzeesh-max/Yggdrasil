@@ -71,87 +71,122 @@ template <typename PrevAgg, typename Target,
           std::meta::info callable, std::meta::info param_source,
           typename... Args>
 consteval auto generate_chain_agg_type() {
-    struct GeneratedAgg;
-    consteval {
-        std::vector<std::meta::info> members;
-        std::vector<std::string> used_names;
+    static constexpr auto tgt_members = std::define_static_array(
+        std::meta::nonstatic_data_members_of(^^Target, std::meta::access_context::current()));
 
-        auto add_member = [&](std::meta::info type, std::string_view base_name,
-                              std::vector<std::meta::info> anns = {}) {
-            std::string name(base_name);
-            size_t count = 0;
-            while (true) {
-                bool conflict = false;
-                for (const auto& un : used_names) {
-                    if (un == name) { conflict = true; break; }
-                }
-                if (!conflict) break;
-                count++;
-                name = std::string(base_name) + "_" + std::to_string(count);
-            }
-            used_names.push_back(name);
-            members.push_back(std::meta::data_member_spec(type, {
-                .name        = name,
-                .annotations = std::move(anns),
-            }));
-        };
-
-        if constexpr (!std::is_same_v<PrevAgg, empty_agg>) {
-            static constexpr auto prev_members = std::define_static_array(
-                std::meta::nonstatic_data_members_of(^^PrevAgg, std::meta::access_context::current()));
-            template for (constexpr auto amem : prev_members) {
-                // Propagate annotations that were carried from the original member
-                // into the previous aggregate — keep them alive through the chain.
-                add_member(std::meta::type_of(amem), std::meta::identifier_of(amem),
-                           std::vector(std::meta::annotations_of(amem)));
-            }
-        }
-
-        static constexpr auto tgt_members = std::define_static_array(
-            std::meta::nonstatic_data_members_of(^^Target, std::meta::access_context::current()));
+    constexpr size_t tgt_valid_count = []() {
+        size_t cnt = 0;
         template for (constexpr auto amem : tgt_members) {
             using MemType = std::remove_cvref_t<typename [: std::meta::type_of(amem) :]>;
             if constexpr (!(std::is_class_v<MemType> && std::is_empty_v<MemType>)) {
-                using RefType = std::add_lvalue_reference_t<typename [: std::meta::type_of(amem) :]>;
-                // Preserve all annotations from the original data member so that
-                // downstream visitors (e.g. for_each, json_serializer) see the
-                // same annotation set on the context aggregate's reference fields.
-                add_member(^^RefType, std::meta::identifier_of(amem),
-                           std::vector(std::meta::annotations_of(amem)));
+                cnt++;
             }
         }
+        return cnt;
+    }();
 
-        size_t param_idx = std::is_same_v<PrevAgg, empty_agg> ? 0 : 1;
-        // Use param_source (not callable) for parameter name lookup — for proxy
-        // members these differ: callable is operator() with no named params,
-        // while param_source is the original function with named params.
-        constexpr bool has_params = requires { std::meta::parameters_of(param_source); };
-        static constexpr auto arg_types = std::define_static_array(std::vector<std::meta::info>{ ^^Args... });
+    if constexpr (tgt_valid_count == 0 && sizeof...(Args) == 0 && !std::is_same_v<PrevAgg, empty_agg>) {
+        return std::type_identity<PrevAgg>{};
+    } else {
+        struct GeneratedAgg;
+        consteval {
+            std::vector<std::meta::info> members;
+            std::vector<std::string> used_names;
 
-        template for (constexpr auto arg_type : arg_types) {
-            std::string p_name = "arg";
-            if constexpr (has_params) {
-                static constexpr auto params = std::define_static_array(std::meta::parameters_of(param_source));
-                if (param_idx < params.size()) {
-                    auto p = params[param_idx];
-                    if (std::meta::has_identifier(p)) {
-                        p_name = std::meta::identifier_of(p);
+            auto add_member = [&](std::meta::info type, std::string_view base_name,
+                                  std::vector<std::meta::info> anns = {}) {
+                std::string name(base_name);
+                size_t count = 0;
+                while (true) {
+                    bool conflict = false;
+                    for (const auto& un : used_names) {
+                        if (un == name) { conflict = true; break; }
+                    }
+                    if (!conflict) break;
+                    count++;
+                    std::string num;
+                    size_t idx = count;
+                    while (idx > 0) {
+                        num = static_cast<char>('0' + (idx % 10)) + num;
+                        idx /= 10;
+                    }
+                    name = std::string(base_name) + "_" + num;
+                }
+                used_names.push_back(name);
+                members.push_back(std::meta::data_member_spec(type, {
+                    .name        = name,
+                    .annotations = std::move(anns),
+                }));
+            };
+
+            if constexpr (!std::is_same_v<PrevAgg, empty_agg>) {
+                static constexpr auto prev_members = std::define_static_array(
+                    std::meta::nonstatic_data_members_of(^^PrevAgg, std::meta::access_context::current()));
+                template for (constexpr auto amem : prev_members) {
+                    // Propagate annotations that were carried from the original member
+                    // into the previous aggregate — keep them alive through the chain.
+                    add_member(std::meta::type_of(amem), std::meta::identifier_of(amem),
+                               std::vector(std::meta::annotations_of(amem)));
+                }
+            }
+
+            template for (constexpr auto amem : tgt_members) {
+                using MemType = std::remove_cvref_t<typename [: std::meta::type_of(amem) :]>;
+                if constexpr (!(std::is_class_v<MemType> && std::is_empty_v<MemType>)) {
+                    using RefType = std::add_lvalue_reference_t<typename [: std::meta::type_of(amem) :]>;
+                    // Preserve all annotations from the original data member so that
+                    // downstream visitors (e.g. for_each, json_serializer) see the
+                    // same annotation set on the context aggregate's reference fields.
+                    add_member(^^RefType, std::meta::identifier_of(amem),
+                               std::vector(std::meta::annotations_of(amem)));
+                }
+            }
+
+            size_t param_idx = std::is_same_v<PrevAgg, empty_agg> ? 0 : 1;
+            // Use param_source (not callable) for parameter name lookup — for proxy
+            // members these differ: callable is operator() with no named params,
+            // while param_source is the original function with named params.
+            constexpr bool has_params = std::meta::is_function(param_source);
+            static constexpr auto arg_types = std::define_static_array(std::vector<std::meta::info>{ ^^Args... });
+
+            auto suffix_name = [](std::string& name, size_t count) {
+                std::string num;
+                if (count == 0) num = "0";
+                else {
+                    size_t idx = count;
+                    while (idx > 0) {
+                        num = static_cast<char>('0' + (idx % 10)) + num;
+                        idx /= 10;
+                    }
+                }
+                name += "_" + num;
+            };
+
+            template for (constexpr auto arg_type : arg_types) {
+                std::string p_name = "arg";
+                if constexpr (has_params) {
+                    static constexpr auto params = std::define_static_array(std::meta::parameters_of(param_source));
+                    if (param_idx < params.size()) {
+                        auto p = params[param_idx];
+                        if (std::meta::has_identifier(p)) {
+                            p_name = std::meta::identifier_of(p);
+                        } else {
+                            suffix_name(p_name, param_idx);
+                        }
                     } else {
                         suffix_name(p_name, param_idx);
                     }
                 } else {
                     suffix_name(p_name, param_idx);
                 }
-            } else {
-                suffix_name(p_name, param_idx);
+                add_member(arg_type, p_name);
+                param_idx++;
             }
-            add_member(arg_type, p_name);
-            param_idx++;
-        }
 
-        std::meta::define_aggregate(^^GeneratedAgg, members);
+            std::meta::define_aggregate(^^GeneratedAgg, members);
+        }
+        return std::type_identity<GeneratedAgg>{};
     }
-    return std::type_identity<GeneratedAgg>{};
 }
 
 consteval std::meta::info get_chain_callable_info(std::meta::info mem) {
@@ -250,7 +285,7 @@ struct ChainProxyMethod {
                     std::meta::nonstatic_data_members_of(^^P, std::meta::access_context::current()));
                 return [&]<size_t... Is>(std::index_sequence<Is...>) {
                     return std::tuple_cat(
-                        []<size_t I>(P& p_) {
+                        []<size_t I>(auto& p_) {
                             constexpr auto pm = prev_members[I];
                             return std::forward_as_tuple(p_.[:pm:]);
                         }.template operator()<Is>(p)...
@@ -264,7 +299,7 @@ struct ChainProxyMethod {
                 std::meta::nonstatic_data_members_of(^^T, std::meta::access_context::current()));
             return [&]<size_t... Is>(std::index_sequence<Is...>) {
                 return std::tuple_cat(
-                    []<size_t I>(T& t_) {
+                    []<size_t I>(auto& t_) {
                         constexpr auto tm = tgt_members[I];
                         using MemType = std::remove_cvref_t<typename [: std::meta::type_of(tm) :]>;
                         if constexpr (!(std::is_class_v<MemType> && std::is_empty_v<MemType>)) {
